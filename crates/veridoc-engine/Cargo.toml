@@ -1,0 +1,20 @@
+[package]
+name = "veridoc-engine"
+description = "veridoc policy: bind, gates, outcomes, brief, judge, cache, result, formatters."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+veridoc-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+reqwest.workspace = true
+
+[dev-dependencies]
+# The scripted plugin the tests drive; the same binary `CARGO_BIN_EXE_…` cannot cross
+# packages, so the tests also locate it by walking ancestors of `current_exe`.
+veridoc-fakeplugin = { path = "../veridoc-fakeplugin" }

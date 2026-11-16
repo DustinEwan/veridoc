@@ -27,18 +27,20 @@ prose does not mention and the assertions in prose that no claim states. S2 repo
 disagree. The judge proposes no change to code and no change to prose.
 
 Every citation that a judge returns is re-verified deterministically before the verdict is kept, and a
-verdict whose citation fails verification is discarded.
+verdict whose citation fails verification is not kept and is a run failure.
 
 A verdict carries the hash of one section, the hash of the claims that section selects, the revision of the
 referents behind those claims, the model id, and the prompt version, and those values are its identity. A
 verdict is stale when any of them moves, and staleness is checked before a verdict is read.
 
-Each task runs `k` samples, a value set per rule and defaulted to one, because a reasoning model converges.
-Disagreement is reported as `ambiguous` rather than resolved by majority, because disagreement is the available
-signal that a span means two things, and that signal only exists where `k` is greater than one.
+Each task runs one sample, because a reasoning model converges and a second sample of it buys nothing. The
+`k` knob and the sample-disagreement detector of an earlier draft are deleted: the default of one already
+disabled the detector.
 
-Judge verdicts report and do not block. A semantic rule blocks only where the project configuration lists
-it as blocking, and that is the only route by which a model answer stops a merge.
+An S2 contradiction whose two spans re-verify blocks, because publishing a sentence the claims deny is the
+failure the project exists to prevent. S1 and citation-state findings report. A judge transport error, a
+timeout, an unusable verdict, or a verdict whose spans cannot be located is a run failure: a check that did
+not run makes the build red rather than green.
 
 ## Consequences
 
@@ -50,6 +52,5 @@ to be different identities. That clause is dropped. Nothing in v1 records author
 rule in `docs/spec.md` covers the case the clause was reaching for without needing to know who wrote
 what: evidence has to move with the prose and with the code, in both directions.
 
-Sampling `k` times multiplies judge cost by `k`. The selection in the index already matches each section with
-the claims that it selects, so the judge reads one section at a time rather than a cross product of the claim
-graph.
+The selection in the index already matches each section with the claims that it selects, so the judge reads
+one section at a time rather than a cross product of the claim graph.

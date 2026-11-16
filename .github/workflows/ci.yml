@@ -1,0 +1,94 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The gate autofuzz runs: any clippy warning in any target, including tests, fails the
+  # job, and every test that needs no Node runs here because veridoc-fakeplugin answers
+  # the protocol in Rust.
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+  # The install machinery end to end on real git sources: clone, manifest parse, install
+  # and build steps, conformance, registry record. The fixture repositories are the
+  # sibling plugin repository and a one-file repository generated around the fake plugin
+  # this repository ships.
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Check out the TypeScript plugin repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/veridoc-plugin-ts
+          path: .ci/veridoc-plugin-ts
+
+      - name: The committed schemas and the plugin repository's copy agree
+        run: diff -r docs/schema .ci/veridoc-plugin-ts/docs/schema
+
+      - name: Build the CLI
+        run: cargo build --release -p veridoc-cli
+
+      - name: Install the fake plugin through the install machinery
+        run: |
+          set -eu
+          cargo build --release -p veridoc-fakeplugin
+          repo=$(mktemp -d)
+          mkdir -p "$repo/bin"
+          cp target/release/veridoc-fakeplugin "$repo/bin/"
+          cat > "$repo/veridoc-plugin.json" <<'EOF'
+          {
+            "name": "veridoc-fakeplugin",
+            "install": [],
+            "build": [],
+            "command": ["bin/veridoc-fakeplugin"],
+            "conformance": { "emitter": ["bin/veridoc-fakeplugin", "--emit-conformance"] }
+          }
+          EOF
+          git -C "$repo" init -q
+          git -C "$repo" add -A
+          git -C "$repo" -c user.email=ci@veridoc -c user.name=ci commit -qm fixture
+          export VERIDOC_HOME="$PWD/.ci/registry"
+          target/release/veridoc install-plugin "$repo"
+          target/release/veridoc plugins | grep -q '^veridoc-fakeplugin '
+
+      - name: Install and validate the TypeScript plugin
+        run: |
+          set -eu
+          export VERIDOC_HOME="$PWD/.ci/registry"
+          target/release/veridoc install-plugin "$PWD/.ci/veridoc-plugin-ts"
+          target/release/veridoc validate-plugin --name veridoc-plugin-ts
+
+      # The example names the installed plugin and links its authoring packages from the
+      # installed checkout; a green `veridoc check` is the end-to-end gate.
+      - name: The example runs green against the installed plugin
+        run: |
+          set -eu
+          export VERIDOC_HOME="$PWD/.ci/registry"
+          (cd examples/scanner && tools/link-authoring.sh)
+          target/release/veridoc check --project examples/scanner

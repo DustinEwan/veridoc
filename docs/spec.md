@@ -89,9 +89,11 @@ project/
     <concept>.feature             scenarios: a world and an action
     <concept>.obs.ts              declared observables and actions
   .veridoc/
-    config.json                   coverage requirement, sampling, citation stores
-    <runId>/veridoc.jsonl         the run journal, harness detail included
-    <runId>/report.md             the human-readable report
+    config.json                   coverage requirement, plugin command, run deadline, judge, output formatters, citation stores
+    verdicts/*.json               the semantic cache, each entry holding the brief that produced the verdict
+    result.json                   the result document every formatter consumes
+    last-result-hash              the hash that lets an unchanged run skip the formatters
+    out/<formatter>/              where the formatters write
 ```
 
 A claim lives in the sidecar beside the file that holds its subject, which keeps documentation out of the
@@ -180,11 +182,10 @@ claim text with the modality of its kind. See [Semantic linting](#semantic-linti
 ### The residue
 
 The residue is the set of claims that nothing in any channel reaches: a `because` claim whose citation
-resolves but whose cited text is unreadable, and a semantic claim whose verdict is missing, stale, or
-ambiguous. The count is the headline number of a run, because it is the share of the documentation that
-rests on nothing checkable. Prose about facts from outside the repository is the permanent occupant of this
-set. A residue that grows with no external cause means the vocabulary is too narrow, not that the project
-needs more prose.
+resolves but whose cited text is unreadable. The count is the headline number of a run, because it is the
+share of the documentation that rests on nothing checkable. Prose about facts from outside the repository is
+the permanent occupant of this set. A residue that grows with no external cause means the vocabulary is too
+narrow, not that the project needs more prose.
 
 ## Assertions and bivalence
 
@@ -324,13 +325,15 @@ declared observables.
 
 ## Evidence and outcomes
 
-Every claim ends in one of three outcomes, and the channel that produced it is recorded beside it.
+Every claim ends in one of two outcomes, and the channel that produced it is recorded beside it.
 
 | Outcome | Meaning |
 | --- | --- |
 | `supported` | The channel evaluated the claim and agreed with it |
 | `contradicted` | The channel evaluated the claim and disagreed, so the sentence is wrong |
-| `ambiguous` | The channel was asked and did not answer, which is not a truth value |
+
+A channel that was asked and did not answer is a run failure: the run stops, the build is red, and no claim
+is given an outcome.
 
 Coverage is claims in state `supported` divided by claims, split by channel. A project sets a required
 coverage figure in `.veridoc/config.json` and the run compares the achieved figure against it, so adoption
@@ -427,8 +430,8 @@ S2 catches the case where prose and claims are both present and disagree. The he
 claim states a rule flatly and the prose softens it to `usually`.
 
 Every span carries an id that the engine assigned when it assembled the brief, so a finding routes back to
-the section that owns it. A verdict that cites a span id the engine never issued is discarded rather than
-trusted, which matters because the author of the prose and the judge are often the same model family and
+the section that owns it. A verdict that cites a span id the engine never issued is a run failure rather than
+a soft pass, which matters because the author of the prose and the judge are often the same model family and
 will agree for the same wrong reason.
 
 Cost is bounded before the model is called. Sections and claims are already paired by the selection in the
@@ -452,8 +455,8 @@ record, which is how an in-house convention is enforced, such as every `ensures`
 function stating the diagnostic that a caller sees, without a fork of the engine.
 
 A deterministic rule runs on every build and blocks. A semantic rule runs in the semantic stage, is cached
-by the key below, and is recorded as a finding. A semantic rule blocks only where the project configuration
-lists it as blocking, and never by default.
+by the key below, and is recorded as a finding. An S2 contradiction whose two spans re-verify blocks; every
+other semantic finding reports.
 
 ### The verdict cache
 
@@ -464,12 +467,6 @@ change to any part of the key is a miss, and the rule runs again on the next bui
 happened with no cache at all. Caching changes the cost of a build and never its verdict, and a miss is
 reported so that a reader can see the work that the run did.
 
-Each semantic rule runs `k` samples, where `k` is set per rule in `.veridoc/config.json` and defaults to
-one, because a reasoning model converges and a second sample of it buys nothing. Disagreement between
-samples is reported as `ambiguous` rather than resolved by majority. That detector only exists where `k` is
-greater than one, so the ambiguity figure in the report is conditional on the setting rather than a property
-of every run.
-
 ### What may block a merge
 
 | Check | Blocks |
@@ -479,11 +476,14 @@ of every run.
 | Evidence did not move with the prose, or prose did not move with the code | Yes |
 | A deterministic lint rule | Yes |
 | Achieved coverage below the configured figure | Yes |
-| An S1 or S2 verdict, or a semantic lint rule | No, unless the project lists the rule as blocking |
+| An S2 pair whose two span ids re-verify | Yes |
+| An S1 finding, or a citation whose state is not terminal | No, reported as a warning |
 
 A judge verdict that is wrong becomes proof once a reader relies on it, and readers stop looking afterwards.
-The deterministic checks do not depend on what anyone believes, so they block. The judge is the convenience
-layer, so it reports.
+The deterministic checks do not depend on what anyone believes, so they block. An S2 contradiction whose two
+spans re-verify blocks, because publishing a sentence the claims deny is the failure the project exists to
+prevent. A judge transport error, a timeout, an unusable verdict, or a verdict whose spans cannot be located
+is a run failure: a check that did not run makes the build red rather than green.
 
 ## Two artifact stages
 
@@ -527,85 +527,83 @@ export interface VeridocPlugin {
     name: string;
     version: string;
     languages: string[];
-    capabilities: Capability[];          // "resolution" | "derivability" | "bivalence" | "execution" | "citation"
+    capabilities: Capability[];          // "collect" | "resolution" | "derivability" | "bivalence" | "execution" | "citation" | "surface"
   }>;
 
-  /** Resolve declared references. An unresolved reference is a normal answer with a reason. */
+  /** Import index.doc.ts, every *.doc.ts sidecar, and every *.obs.ts, and report what was declared. */
+  collect(req: { root: string }): Promise<{
+    concepts: string[];
+    documents: Array<{ path: string; audience: string; question: string; selects: Selects; notApplicable?: string }>;
+    claims: RawClaim[];
+    observables: Array<{ name: string; type: string }>;
+    actions: Array<{ name: string; calls: RefToken; produces: string[] }>;
+    fixtures: string[];
+    skipped: Array<{ file: string; reason: string }>;
+  }>;
+
   resolve(req: { refs: string[] }): Promise<{
     resolved: Array<{ ref: string; referentId: string; signature: string }>;
     unresolved: Array<{ ref: string; reason: string }>;
   }>;
 
-  /** The facts about one referent that a reader can already see in the declaration. */
   derivable(req: { referentId: string }): Promise<{ facts: string[] }>;
 
-  /** Classify one assertion tree before anything runs. */
   bivalence(req: { claimId: string }): Promise<{
     bivalent: boolean;
     method: "structural" | "static-analysis" | "witnesses";
+    witnessAccepts?: boolean;
+    witnessRejects?: boolean;
     reason?: string;
   }>;
 
-  /** Run one scenario. Only claims already classified as bivalent are ever run. */
-  run(req: { scenarioId: string; deadlineMs: number }): Promise<{
-    outcome: "supported" | "contradicted";
+  run(req: {
+    scenarioId: string; fixture: string; action: string; args: string[];
+    deadlineMs: number; leaves: Array<{ leafId: string }>;
+  }): Promise<{
+    ok: boolean;
     observed: Array<{ observable: string; value: string }>;
+    satisfied: Array<{ leafId: string; ok: boolean }>;
+    failure?: { kind: "build" | "fixture" | "deadline" | "plugin"; detail: string };
   }>;
 
-  /** Resolve typed citations against a declared store. */
   cite(req: { citations: Array<{ store: string; id: string; turn?: number }> }): Promise<{
     resolved: Array<{ id: string; text: string; state?: string }>;
     unresolved: Array<{ id: string; reason: string }>;
   }>;
 
-  /** The declared surface, so the run can report symbols that no claim covers. */
   surface(): Promise<{ referents: Array<{ referentId: string; name: string; public: boolean }> }>;
 }
 ```
 
 | Capability | What the engine does without it |
 | --- | --- |
+| `collect` | Nothing works. Without the claim set there is no build. |
 | `resolution` | Nothing works. A plugin without it cannot be used. |
 | `derivability` | The derivability ban is inert and is reported as inert. |
 | `bivalence` | No claim may take the scenario channel, so every checkable claim is an error. |
 | `execution` | Scenarios are parsed and bound but never run, so every scenario-channel claim is an error. |
 | `citation` | A `because` claim cannot resolve, so it is an error rather than a pass. |
+| `surface` | The run cannot report uncovered public symbols, and says so. |
 
-A missing capability is reported, never silently treated as a pass. A plugin that returns an outcome for a
-claim the engine classified as not bivalent is a protocol error, so the routing is typed rather than hoped
-for.
+A missing capability is reported, never silently treated as a pass. A plugin that answers a leaf id the
+engine never issued is a run failure, so the routing is typed rather than hoped for.
 
 ## The report
 
-A run writes `.veridoc/<runId>/veridoc.jsonl`, one record per line, with a final `finished` record that
-holds the brief, and `.veridoc/<runId>/report.md` for the reader.
+A failing run writes no artifact and prints `file:line:` diagnostics. A succeeding run writes
+`.veridoc/result.json` and runs the output formatters the project configures.
 
-`report.md` is ordered by what a reader should do, not by object type:
-
-1. Contradicted claims, with both readings and the values that caused the disagreement.
-2. Errors from the paths table, grouped by file, each naming the thing that is missing.
-3. Sections that select no claim, and claims that no section lists, taken from the index.
-4. Prose that contradicts a claim, from S2.
-5. Ambiguous spans, where sampling is enabled.
-6. The residue, with the reason for each claim in it.
-7. Rejected-as-derivable claims, with the fact that made each one redundant.
-8. Cache misses, that is verdicts re-assembled during this run.
-9. Symbols on the declared surface that no claim covers.
-
-Harness detail, including every scenario that could not be evaluated and the reason, is in `veridoc.jsonl`
-and not in this report. A reader of `report.md` is deciding what to change in the documentation, not what to
-repair in a fixture.
+Harness detail, including every scenario that could not be evaluated and the reason, is the run failure on
+stderr. A reader of the diagnostics is deciding what to change in the documentation, not what to repair in a
+fixture.
 
 | Metric | Definition |
 | --- | --- |
-| Coverage | Claims in state `supported`, divided by claims, split by channel, against the configured figure |
-| Contradicted | Claims in state `contradicted`, as a count |
-| Unevaluated | Claims with no outcome, which is a count that must be zero |
-| Custom logic | Assertions that rest on a `satisfies` leaf, as a count and a share |
-| Unmatched prose | Sections whose prose says something no selected claim states, as a count |
+| Coverage | Claims in state `supported`, divided by claims on a checkable channel, split by channel, against the configured figure |
+| Custom logic | `satisfies` leaves the plugin did not mark bivalent, divided by leaves |
+| Unmatched prose | Prose that no selected claim states, from S1, as a count |
 | Residue | Claims in the residue, as a count and a share |
 | Redundancy | Claims rejected as derivable, as a count |
-| Ambiguity | Spans with an `ambiguous` verdict, where `k` is greater than one |
 | Obligation | Declared tree nodes satisfied, divided by nodes that are not `notApplicable` |
 
 ## What veridoc does not do

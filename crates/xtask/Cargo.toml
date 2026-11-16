@@ -1,0 +1,21 @@
+[package]
+name = "xtask"
+description = "repository helpers: schema generation and the docs/spec.md contract test."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+veridoc-protocol.workspace = true
+veridoc-engine.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# The suite is only driven from the test, never from the schema or contract tool.
+veridoc-conformance.workspace = true
