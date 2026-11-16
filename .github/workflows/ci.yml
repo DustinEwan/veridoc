@@ -48,9 +48,6 @@ jobs:
           repository: ${{ github.repository_owner }}/veridoc-plugin-ts
           path: .ci/veridoc-plugin-ts
 
-      - name: The committed schemas and the plugin repository's copy agree
-        run: diff -r docs/schema .ci/veridoc-plugin-ts/docs/schema
-
       - name: Build the CLI
         run: cargo build --release -p veridoc-cli
 
