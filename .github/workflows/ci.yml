@@ -27,26 +27,16 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
-  # The install machinery end to end on real git sources: clone, manifest parse, install
-  # and build steps, conformance, registry record. The fixture repositories are the
-  # sibling plugin repository and a one-file repository generated around the fake plugin
-  # this repository ships.
+  # The install machinery end to end: clone, manifest parse, install and build steps,
+  # conformance, registry record. The fixture is a one-file repository generated around
+  # the fake plugin this repository ships. Plugin repositories prove themselves against
+  # this engine in their own CI; the engine never fetches a plugin to test itself.
   install:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-
-      - name: Check out the TypeScript plugin repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/veridoc-plugin-ts
-          path: .ci/veridoc-plugin-ts
 
       - name: Build the CLI
         run: cargo build --release -p veridoc-cli
@@ -73,19 +63,3 @@ jobs:
           export VERIDOC_HOME="$PWD/.ci/registry"
           target/release/veridoc install-plugin "$repo"
           target/release/veridoc plugins | grep -q '^veridoc-fakeplugin '
-
-      - name: Install and validate the TypeScript plugin
-        run: |
-          set -eu
-          export VERIDOC_HOME="$PWD/.ci/registry"
-          target/release/veridoc install-plugin "$PWD/.ci/veridoc-plugin-ts"
-          target/release/veridoc validate-plugin --name veridoc-plugin-ts
-
-      # The example names the installed plugin and links its authoring packages from the
-      # installed checkout; a green `veridoc check` is the end-to-end gate.
-      - name: The example runs green against the installed plugin
-        run: |
-          set -eu
-          export VERIDOC_HOME="$PWD/.ci/registry"
-          (cd examples/scanner && tools/link-authoring.sh)
-          target/release/veridoc check --project examples/scanner
