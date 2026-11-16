@@ -4,9 +4,11 @@ Status: accepted, 2026-11-16.
 
 ## Context
 
-The pipeline has four links: prose, then claims, then claim tests, then code. Each link is checked by
-the one above it, and the two kinds of check are not alike. Whether a claim holds is decidable, so a
-program settles it. Whether prose faithfully states the claims is not decidable, so a model answers it.
+The pipeline has four links: prose, then claims, then scenarios, then code. Each link is checked by
+the one above it, and the two kinds of check are not alike. Whether a bivalent assertion holds over the values
+that a scenario produced is decidable, so a program settles it. Whether prose faithfully states the claims is
+not decidable, so a model answers it, and a claim whose check is not decidable is routed to that model rather
+than being dropped.
 
 An earlier draft gave the judge four tasks, and two of them were wrong in ways that this division
 exposes.
@@ -22,32 +24,35 @@ design exists to distrust.
 
 ## Decision
 
-Whether a claim holds is settled by the deterministic stage. A claim test supports the prose and runs
-deterministically, and a failure has three causes: the code is wrong, the claim test is wrong, or the
-environment is wrong, because a fixture broke, a dependency moved, or a service was not up. The third
-is not a finding about the project.
+Whether a bivalent claim holds is settled by the deterministic stage, and a claim whose assertion is not bivalent
+is routed to the judge instead of being excused. The outcome for a claim is one of three states: `supported`,
+`contradicted`, or `ambiguous`, and `ambiguous` is not a truth value but an absence of one. A build that will not
+compile, a fixture that cannot be constructed, and a scenario that outlives its deadline are run failures recorded
+at scenario level and never claim states, because one broken build would otherwise print thousands of unevidenced
+claims and teach a reader to ignore the report.
 
-Only claims with admissible evidence reach the document, so the judge never sees a claim that no test
-supports.
+The evidence state of every claim travels with it into the brief, so the judge reads the outcome rather
+than guessing at it.
 
 Two tasks remain over that material, and both compare prose against claims. S1 reports the claims that
 prose does not mention, and the assertions in prose that no claim states. S2 reports the pair of spans
 that disagree. A third task, S3, compares the audience and question of every document node. The judge
 proposes no change to code and no change to prose.
 
-One deterministic rule sits alongside them. When a change set edits a claim test and the code that the
-test binds to while the claim text stays put, the run stops and asks a person, because that change has
-the shape of a test repaired to match broken code.
+One deterministic rule sits alongside them. When a change set edits a scenario, or the assertion of a claim, and
+the code that the scenario binds to, while the claim text stays put, the run stops and asks a person, because
+that change has the shape of evidence rewritten to match broken code.
 
 ## Consequences
 
 The judge's answer is only as good as the claims in front of it. Those claims are certified, so what is
 left is translation rather than truth, and a model answers that narrower question more reliably.
 
-A vacuous claim, meaning one that no code could ever contradict, is no longer detected directly. The
-expectation is that it appears as prose that no claim states, which S1 finds. If that does not hold in
-a pilot, the gap is real and v1 has no answer for it.
+A vacuous assertion, meaning one that cannot fail, is caught by the bivalence gate before a claim may take the
+scenario channel. What is still undetected is an assertion that can fail but tests the wrong thing, which is a
+bivalent assertion beside a sentence that says more than the assertion checks. That gap sits between `text` and
+`asserts`, and only the comparison that the judge already makes reaches it.
 
-The rule about a test and its code moving together will report honest refactors too, because an honest
+The rule about a scenario and its code moving together will report honest refactors too, because an honest
 refactor does edit both. The run stops and asks rather than rejecting, which is the cheapest answer that
 does not also push an agent to split the edit across two commits and evade the rule entirely.
