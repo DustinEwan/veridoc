@@ -74,10 +74,12 @@ enum Commands {
     },
     /// List installed plugins: name, commit, url, checkout path.
     Plugins,
-    /// Re-drive the conformance suite against installed checkouts; without --name, all.
+    /// Drive the conformance suite against a plugin: an installed plugin name or a
+    /// checkout directory (default `.`). A checkout needs only this executable; its
+    /// build steps run, then the suite.
     ValidatePlugin {
-        #[arg(long)]
-        name: Option<String>,
+        /// Installed plugin name or plugin checkout directory.
+        plugin: Option<String>,
     },
 }
 
@@ -107,7 +109,7 @@ fn main() -> ! {
             name,
         } => install_plugin::run(&git_url, reference.as_deref(), name.as_deref()),
         Commands::Plugins => plugins_cmd::run(),
-        Commands::ValidatePlugin { name } => validate_plugin::run(name.as_deref()),
+        Commands::ValidatePlugin { plugin } => validate_plugin::run(plugin.as_deref()),
     };
     match result {
         Ok(code) => exit(code),

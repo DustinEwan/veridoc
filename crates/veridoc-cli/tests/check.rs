@@ -338,3 +338,42 @@ fn probe_plugin_prints_the_claim_and_referent_tables() {
     assert!(stdout.contains("referents:"), "stdout: {stdout}");
     assert!(stdout.contains("vd:r:probe"), "stdout: {stdout}");
 }
+
+#[test]
+fn validate_plugin_validates_a_checkout_with_an_empty_registry() {
+    let dir = tmp_dir("validate-checkout");
+    let exe = fakeplugin();
+    let exe_name = exe.file_name().unwrap().to_string_lossy().into_owned();
+    std::fs::create_dir_all(dir.join("bin")).unwrap();
+    std::fs::copy(&exe, dir.join("bin").join(&exe_name)).unwrap();
+    std::fs::write(
+        dir.join("veridoc-plugin.json"),
+        format!(
+            "{{\"name\": \"veridoc-fakeplugin\", \"install\": [], \"build\": [], \
+             \"command\": [\"bin/{exe_name}\"], \
+             \"conformance\": {{\"emitter\": [\"bin/{exe_name}\", \"--emit-conformance\"]}}}}"
+        ),
+    )
+    .unwrap();
+    // An empty registry: the checkout is everything the command is given.
+    let output = Command::new(env!("CARGO_BIN_EXE_veridoc"))
+        .args(["validate-plugin", &dir.to_string_lossy()])
+        .env("VERIDOC_HOME", dir.join("empty-registry"))
+        .output()
+        .expect("run veridoc");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(output.status.success(), "exit {:?}\nstdout: {stdout}\nstderr: {stderr}", output.status.code());
+    assert!(stdout.contains("10 rules passed"), "stdout: {stdout}");
+}
+
+#[test]
+fn validate_plugin_names_both_alternatives_when_the_argument_is_neither() {
+    let dir = tmp_dir("validate-nothing");
+    let (code, _stdout, stderr) = veridoc(&["validate-plugin", dir.to_str().unwrap()]);
+    assert_eq!(code, 3);
+    assert!(
+        stderr.contains("no veridoc-plugin.json in") && stderr.contains("or pass an installed plugin name"),
+        "stderr: {stderr}"
+    );
+}

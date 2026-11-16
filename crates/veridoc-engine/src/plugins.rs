@@ -54,6 +54,14 @@ pub fn root() -> PathBuf {
     base.join("plugins")
 }
 
+/// The name a manifest may claim: non-empty and usable as one path segment.
+pub fn check_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("veridoc-plugin.json declares no usable name".to_string());
+    }
+    Ok(())
+}
+
 /// Read `<dir>/veridoc-plugin.json`.
 pub fn read_manifest(dir: &Path) -> Result<PluginManifest, String> {
     let text = std::fs::read_to_string(dir.join("veridoc-plugin.json"))

@@ -3,7 +3,7 @@
 //! swap live in the CLI, because the suite depends on this crate and the engine must not
 //! depend back.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::git::git;
@@ -52,21 +52,25 @@ pub fn stage(url: &str, reference: Option<&str>) -> Result<Staged, String> {
 pub fn run_steps(staged: &Staged) -> Result<(), String> {
     for (label, steps) in [("install", &staged.manifest.install), ("build", &staged.manifest.build)] {
         for argv in steps {
-            let Some((program, args)) = argv.split_first() else {
-                return Err(format!("a {label} step is an empty argv"));
-            };
-            let status = Command::new(program)
-                .args(args)
-                .current_dir(&staged.path)
-                .status()
-                .map_err(|e| format!("cannot run {label} step `{}`: {e}", argv.join(" ")))?;
-            if !status.success() {
-                return Err(format!(
-                    "{label} step `{}` exited {status}",
-                    argv.join(" ")
-                ));
-            }
+            run_step(label, &staged.path, argv)?;
         }
+    }
+    Ok(())
+}
+
+/// Run one manifest step with `dir` as the working directory. `veridoc validate-plugin`
+/// reaches for this directly because a checkout validation runs `build` and never `install`.
+pub fn run_step(label: &str, dir: &Path, argv: &[String]) -> Result<(), String> {
+    let Some((program, args)) = argv.split_first() else {
+        return Err(format!("a {label} step is an empty argv"));
+    };
+    let status = Command::new(program)
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .map_err(|e| format!("cannot run {label} step `{}`: {e}", argv.join(" ")))?;
+    if !status.success() {
+        return Err(format!("{label} step `{}` exited {status}", argv.join(" ")));
     }
     Ok(())
 }

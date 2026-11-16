@@ -63,3 +63,16 @@ jobs:
           export VERIDOC_HOME="$PWD/.ci/registry"
           target/release/veridoc install-plugin "$repo"
           target/release/veridoc plugins | grep -q '^veridoc-fakeplugin '
+
+  # `curl | sh` runs this file with sh, which is dash on Debian and Ubuntu, so a bashism
+  # breaks the installer silently. shellcheck plus a real dash parse is the gate.
+  installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint the installer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck dash
+          shellcheck -s sh install.sh
+          dash -n install.sh

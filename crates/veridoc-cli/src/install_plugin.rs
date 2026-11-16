@@ -20,13 +20,7 @@ pub fn run(url: &str, reference: Option<&str>, name: Option<&str>) -> Result<i32
 
 fn finish(staged: &Staged, url: &str, name: Option<&str>) -> Result<(), String> {
     let manifest_name = staged.manifest.name.clone();
-    if manifest_name.is_empty()
-        || manifest_name.contains('/')
-        || manifest_name.contains('\\')
-        || manifest_name.contains("..")
-    {
-        return Err("veridoc-plugin.json declares no usable name".to_string());
-    }
+    plugins::check_name(&manifest_name)?;
     if let Some(want) = name {
         if want != manifest_name {
             return Err(format!(
