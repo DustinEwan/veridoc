@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use veridoc_engine::hash;
 use veridoc_engine::plugin::{sentence, Launch, PluginClient};
-use veridoc_protocol::{contract::*, Method, MethodName, METHOD_NOT_FOUND, PROTOCOL_VERSION};
+use veridoc_protocol::{
+    contract::*, Method, MethodName, Timeouts, METHOD_NOT_FOUND, PROTOCOL_VERSION,
+};
 
 /// Every rule the suite can report, in the order it drives them.
 pub const RULES: &[&str] = &[
@@ -690,7 +692,9 @@ fn run_scenario(
         fixture: manifest.fixture.clone(),
         action: manifest.action.clone(),
         args: Vec::new(),
-        deadline_ms: deadline.as_millis() as u64,
+        // The suite owns the wait below, so the plugin's deadline is derived from it and is
+        // strictly shorter (spec §9).
+        deadline_ms: Timeouts::plugin_deadline(deadline),
         leaves,
     };
     let params = serde_json::to_value(&request).expect("RunRequest is serializable");

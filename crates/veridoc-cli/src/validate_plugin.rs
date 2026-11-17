@@ -50,7 +50,7 @@ pub fn run(plugin: Option<&str>) -> Result<i32, String> {
                 ));
             }
             // Name the unbuilt plugin here rather than letting it die inside
-            // `PluginClient::spawn` with an OS error: at least one command element must
+            // `PluginClient::connect` with an OS error: at least one command element must
             // name a file that now exists.
             if !manifest
                 .command

@@ -108,7 +108,11 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
                 error.code, error.message
             ))
         }
-        Call::Lost(lost) => return Report::run_failure(format!("run failed: plugin: {lost}")),
+        // A loss is a connection problem, so it carries the plugin's own uncorrelated refusal
+        // beside it when the connection holds one (spec §4).
+        Call::Lost(lost) => {
+            return Report::run_failure(client.with_fault(&format!("run failed: plugin: {lost}")))
+        }
     };
     let collect: CollectWire = match serde_json::from_value(raw) {
         Ok(collect) => collect,
@@ -129,7 +133,7 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
     ) {
         Ok(bound) => bound,
         Err(BindFailure::RunFailure(why)) => {
-            return Report::run_failure(format!("run failed: plugin: {why}"));
+            return Report::run_failure(client.with_fault(&format!("run failed: plugin: {why}")));
         }
         Err(BindFailure::Errors(errors)) => {
             return Report::findings(
@@ -150,7 +154,9 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
         |referent| client.derivable(referent),
     ) {
         Ok(outcome) => outcome,
-        Err(detail) => return Report::run_failure(format!("run failed: plugin: {detail}")),
+        Err(detail) => {
+            return Report::run_failure(client.with_fault(&format!("run failed: plugin: {detail}")))
+        }
     };
     for rejected in &derived.rejected {
         warnings.push(crate::result::Warning {
@@ -169,7 +175,9 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
         client.bivalence(claim)
     }) {
         Ok(outcome) => outcome,
-        Err(detail) => return Report::run_failure(format!("run failed: plugin: {detail}")),
+        Err(detail) => {
+            return Report::run_failure(client.with_fault(&format!("run failed: plugin: {detail}")))
+        }
     };
     let mut errors: Vec<Diagnostic> =
         classified.errors.iter().map(bind_error_diagnostic).collect();
@@ -179,8 +187,8 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
     }
 
     // 6. Execution: scenario claims run and evaluate; contradictions are findings.
-    let executed = match execute::execute(&claims, config.run.scenario_deadline_ms, |req| {
-        client.run(req)
+    let executed = match execute::execute(&claims, config.run.scenario_deadline_ms, |req, host| {
+        client.run(req, host)
     }) {
         Ok(executed) => executed,
         Err(failure) => {
@@ -190,7 +198,10 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
                 RunFailureKind::Plugin => "plugin",
                 RunFailureKind::Deadline => "deadline",
             };
-            return Report::run_failure(format!("run failed: {kind}: {}", failure.detail));
+            return Report::run_failure(client.with_fault(&format!(
+                "run failed: {kind}: {}",
+                failure.detail
+            )));
         }
     };
     let mut outcomes: Vec<OutcomeOf> = Vec::new();
@@ -260,7 +271,9 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
         },
     ) {
         Ok(outcome) => outcome,
-        Err(detail) => return Report::run_failure(format!("run failed: plugin: {detail}")),
+        Err(detail) => {
+            return Report::run_failure(client.with_fault(&format!("run failed: plugin: {detail}")))
+        }
     };
     if let Some(detail) = RUN_FAILURE.with(|slot| slot.borrow_mut().take()) {
         return Report::run_failure(format!("run failed: judge: {detail}"));
@@ -437,7 +450,11 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
                     error.code, error.message
                 ))
             }
-            Call::Lost(lost) => return Report::run_failure(format!("run failed: plugin: {lost}")),
+            Call::Lost(lost) => {
+                return Report::run_failure(client.with_fault(&format!(
+                    "run failed: plugin: {lost}"
+                )))
+            }
         }
     } else {
         eprintln!(

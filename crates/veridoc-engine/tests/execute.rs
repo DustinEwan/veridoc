@@ -3,6 +3,7 @@
 //! deadline are run failures that leave the claim in no outcome list.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde_json::json;
 use veridoc_engine::bind::{BoundChannel, BoundClaim};
@@ -77,15 +78,19 @@ fn exit_code(expected: serde_json::Value) -> Asserts {
     })
 }
 
+/// The handshake-first rule (§6) is the mechanism's now, so a connection only exists once the
+/// handshake has been answered: every fixture connects rather than spawning.
 fn client(script: serde_json::Value) -> PluginClient {
-    PluginClient::spawn(&launch(script)).expect("spawn fake plugin")
+    PluginClient::connect(&launch(script), Duration::from_secs(30))
+        .expect("connect the fake plugin")
+        .0
 }
 
 #[test]
 fn a_holding_tree_is_supported() {
     let client = client(json!({})); // the default run answers exit.code = "2"
-    let executed = execute::execute(&[scenario_claim(exit_code(json!(2)))], 30_000, |req| {
-        client.run(req)
+    let executed = execute::execute(&[scenario_claim(exit_code(json!(2)))], 30_000, |req, host| {
+        client.run(req, host)
     })
     .expect("run");
     assert_eq!(executed[0].outcome, Outcome::Supported);
@@ -95,8 +100,8 @@ fn a_holding_tree_is_supported() {
 #[test]
 fn a_failing_tree_contradicts_with_values_and_both_readings() {
     let client = client(json!({}));
-    let executed = execute::execute(&[scenario_claim(exit_code(json!(0)))], 30_000, |req| {
-        client.run(req)
+    let executed = execute::execute(&[scenario_claim(exit_code(json!(0)))], 30_000, |req, host| {
+        client.run(req, host)
     })
     .expect("run");
     assert_eq!(executed[0].outcome, Outcome::Contradicted);
@@ -130,8 +135,10 @@ fn a_string_contains_is_substring_and_an_array_contains_is_membership() {
             }),
         ],
     };
-    let executed = execute::execute(&[scenario_claim(tree)], 30_000, |req| client.run(req))
-        .expect("run");
+    let executed = execute::execute(&[scenario_claim(tree)], 30_000, |req, host| {
+        client.run(req, host)
+    })
+    .expect("run");
     assert_eq!(executed[0].outcome, Outcome::Supported);
 }
 
@@ -145,8 +152,8 @@ fn ok_false_is_a_run_failure_with_the_plugins_kind() {
             "failure": { "kind": "fixture", "detail": "fixture blew up" }
         }
     }));
-    let failure = execute::execute(&[scenario_claim(exit_code(json!(2)))], 30_000, |req| {
-        client.run(req)
+    let failure = execute::execute(&[scenario_claim(exit_code(json!(2)))], 30_000, |req, host| {
+        client.run(req, host)
     })
     .expect_err("ok: false must stop the run");
     assert_eq!(failure.kind, RunFailureKind::Fixture);
@@ -156,8 +163,8 @@ fn ok_false_is_a_run_failure_with_the_plugins_kind() {
 #[test]
 fn a_scripted_deadline_is_a_run_failure_that_leaves_the_claim_absent() {
     let client = client(json!({ "_sleepMs": { "run": 500 } }));
-    let failure = execute::execute(&[scenario_claim(exit_code(json!(2)))], 50, |req| {
-        client.run(req)
+    let failure = execute::execute(&[scenario_claim(exit_code(json!(2)))], 50, |req, host| {
+        client.run(req, host)
     })
     .expect_err("the deadline must stop the run");
     assert_eq!(failure.kind, RunFailureKind::Deadline);
@@ -180,8 +187,10 @@ fn a_satisfies_leaf_the_plugin_skipped_is_a_run_failure_not_a_false() {
             rejects: Some(json!([])),
         }),
     });
-    let failure = execute::execute(&[scenario_claim(tree)], 30_000, |req| client.run(req))
-        .expect_err("an unanswered leaf must stop the run");
+    let failure = execute::execute(&[scenario_claim(tree)], 30_000, |req, host| {
+        client.run(req, host)
+    })
+    .expect_err("an unanswered leaf must stop the run");
     assert_eq!(failure.kind, RunFailureKind::Plugin);
     assert_eq!(
         failure.detail,

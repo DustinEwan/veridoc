@@ -2,10 +2,12 @@
 //! assertion tree itself. The plugin answers values and never a verdict, and the outcome has
 //! exactly two members — a claim is either certified or the run is red (`docs/spec.md:356`).
 
+use std::time::Duration;
+
 use serde_json::Value;
 use veridoc_protocol::{
     Asserts, Call, Check, LeafAnswer, Loss, RunFailure, RunFailureKind, RunLeaf, RunRequest,
-    RunResponse,
+    RunResponse, Timeouts,
 };
 use crate::bind::{BoundChannel, BoundClaim};
 
@@ -32,13 +34,17 @@ pub struct Executed {
 }
 
 /// Run every scenario-channel claim, sequentially, and evaluate each tree. `run` is the
-/// plugin call supplied by the caller; any `Err(RunFailure)` stops the whole run, because a
-/// run failure is never a claim state.
+/// plugin call supplied by the caller, given the request and this engine's own wait for it;
+/// any `Err(RunFailure)` stops the whole run, because a run failure is never a claim state.
+/// `deadline_ms` is that wait: the engine owns the kill timer, and the plugin's `deadlineMs` is
+/// derived from it rather than being a second number written by hand (spec §9).
 pub fn execute(
     claims: &[BoundClaim],
     deadline_ms: u64,
-    mut run: impl FnMut(&RunRequest) -> Call<RunResponse>,
+    mut run: impl FnMut(&RunRequest, Duration) -> Call<RunResponse>,
 ) -> Result<Vec<Executed>, RunFailure> {
+    let host_timeout = Duration::from_millis(deadline_ms);
+    let plugin_deadline = Timeouts::plugin_deadline(host_timeout);
     let mut executed = Vec::new();
 
     for claim in claims {
@@ -66,11 +72,11 @@ pub fn execute(
             fixture: fixture.clone(),
             action: action.clone(),
             args: args.clone(),
-            deadline_ms,
+            deadline_ms: plugin_deadline,
             leaves,
         };
 
-        let response = match run(&request) {
+        let response = match run(&request, host_timeout) {
             Call::Result(response) => response,
             // A scenario that outlived its deadline is red with kind `deadline`; the prose
             // is not blamed on a slow machine (`docs/spec.md:354`). Only a loss says nothing

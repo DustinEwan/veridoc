@@ -54,6 +54,16 @@ fn launch(script: Option<serde_json::Value>) -> Launch {
     }
 }
 
+/// The handshake-first rule (§6) is the mechanism's now: `Plugin::start` is the only way to get a
+/// connection, so there is no client that has not shaken hands. Every negative control below
+/// therefore scripts a method other than `handshake`, so the connection comes up and the scripted
+/// method is the thing that misbehaves.
+fn connected(script: Option<serde_json::Value>) -> PluginClient {
+    PluginClient::connect(&launch(script), Duration::from_secs(30))
+        .expect("the scripted handshake answers")
+        .0
+}
+
 #[test]
 fn connect_handshakes_and_reports_the_declared_capabilities() {
     let (client, handshake) = PluginClient::connect(&launch(None), Duration::from_secs(30))
@@ -68,16 +78,20 @@ fn connect_handshakes_and_reports_the_declared_capabilities() {
     let resolved = client.resolve(&["src/cli.ts|probe".into()]).payload().unwrap();
     assert_eq!(resolved.resolved[0].referent_id, "vd:r:probe");
     let run = client
-        .run(&veridoc_protocol::RunRequest {
-            scenario_id: "config/rejects-missing-root".into(),
-            fixture: "empty-directory".into(),
-            action: "run-probe".into(),
-            args: vec![],
-            deadline_ms: 5_000,
-            leaves: vec![veridoc_protocol::RunLeaf {
-                leaf_id: "c000000000000001#l0".into(),
-            }],
-        })
+        .run(
+            &veridoc_protocol::RunRequest {
+                scenario_id: "config/rejects-missing-root".into(),
+                fixture: "empty-directory".into(),
+                action: "run-probe".into(),
+                args: vec![],
+                deadline_ms: 5_000,
+                leaves: vec![veridoc_protocol::RunLeaf {
+                    leaf_id: "c000000000000001#l0".into(),
+                }],
+            },
+            // The engine's own wait for the scenario; the plugin's deadline is derived from it.
+            Duration::from_secs(5),
+        )
         .payload()
         .unwrap();
     assert!(run.ok);
@@ -140,26 +154,26 @@ fn a_killed_plugin_resolves_in_flight_and_later_calls_as_killed() {
 
 #[test]
 fn a_response_with_an_unknown_id_is_discarded_and_the_request_times_out() {
-    // The fake answers `handshake` with `id: 0`, which matches no in-flight request.
+    // The fake answers `handshake` with `id: 0`, which matches no in-flight request: the frame is
+    // discarded and the request times out. The handshake-first rule (§6) means the engine cannot
+    // issue a call of its own before the handshake is answered, so the discard is now observed on
+    // the handshake itself rather than on a later method.
     let raw = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 0,
         "result": veridoc_fakeplugin::default_handshake()
     });
-    let client = PluginClient::spawn(
+    let err = PluginClient::connect(
         &launch(Some(serde_json::json!({ "_raw": { "handshake": raw } }))),
+        Duration::from_millis(300),
     )
-    .unwrap();
-    let call = client.handshake(Duration::from_millis(300));
-    assert_eq!(call.loss(), Some(Loss::NoAnswer));
+    .unwrap_err();
+    assert_eq!(err, ConnectError::Lost(Loss::NoAnswer));
 }
 
 #[test]
 fn an_unparseable_line_is_dropped_and_the_request_times_out() {
-    let client = PluginClient::spawn(
-        &launch(Some(serde_json::json!({ "_malformed": ["collect"] }))),
-    )
-    .unwrap();
+    let client = connected(Some(serde_json::json!({ "_malformed": ["collect"] })));
     let call = client.collect("/tmp", Duration::from_millis(300));
     assert_eq!(call.loss(), Some(Loss::NoAnswer));
 }
@@ -169,10 +183,7 @@ fn an_unreadable_answer_is_an_unusable_result_loss() {
     // A script whose `derivable` override is not the shape the answer must have is a result
     // the client cannot read: the mechanism files it as a loss with the reason
     // `unusable-result`, not as a plugin error and not as a lost process.
-    let client = PluginClient::spawn(&launch(Some(
-        serde_json::json!({ "derivable": "not an object" }),
-    )))
-    .unwrap();
+    let client = connected(Some(serde_json::json!({ "derivable": "not an object" })));
     let call = client.derivable("vd:r:probe");
     match call {
         Call::Lost(Loss::Profile { reason, .. }) => {
@@ -187,15 +198,15 @@ fn a_plugin_error_frame_is_a_refusal() {
     // A plugin that answers a valid method with a JSON-RPC error frame has ANSWERED: the
     // process is alive, so the call is a refusal carrying the frame's own code and message,
     // never a loss. This is the case the old code misfiled as a lost process.
+    // The frame must carry the id of the request it answers, and the mechanism allocates from 1
+    // in request order: the handshake `Plugin::start` sends is 1, so the scripted `derivable`
+    // answers request 2.
     let frame = serde_json::json!({
         "jsonrpc": "2.0",
-        "id": 1,
+        "id": 2,
         "error": { "code": -32000, "message": "store unreachable" }
     });
-    let client = PluginClient::spawn(&launch(Some(
-        serde_json::json!({ "_raw": { "derivable": frame } }),
-    )))
-    .unwrap();
+    let client = connected(Some(serde_json::json!({ "_raw": { "derivable": frame } })));
     let error = client
         .derivable("vd:r:probe")
         .refusal()
@@ -218,16 +229,13 @@ fn missing_capabilities_are_reported_never_assumed() {
 
 #[test]
 fn stderr_is_captured_for_the_run_failure_stream() {
-    let client = PluginClient::spawn(&launch(Some(serde_json::json!({
+    let client = connected(Some(serde_json::json!({
         "_stderr": ["plugin said: store unreachable", "plugin said: store unreachable"]
-    }))))
-    .unwrap();
-    // Give the drain a moment, then read what the plugin wrote.
+    })));
+    // Give the mechanism's drain a moment, then read what the plugin wrote.
     let mut lines = Vec::new();
     for _ in 0..100 {
-        lines = veridoc_engine::plugin::plugin_said(
-            &client.stderr_lines.lock().unwrap().clone(),
-        );
+        lines = veridoc_engine::plugin::plugin_said(&client.stderr_lines());
         if !lines.is_empty() {
             break;
         }
@@ -238,23 +246,61 @@ fn stderr_is_captured_for_the_run_failure_stream() {
 
 #[test]
 fn a_sleeping_run_outliving_its_deadline_is_a_no_answer() {
-    let client = PluginClient::spawn(&launch(Some(serde_json::json!({
+    let client = connected(Some(serde_json::json!({
         "_sleepMs": { "run": 2_000 }
-    }))))
-    .unwrap();
-    let call = client.run(&veridoc_protocol::RunRequest {
-        scenario_id: "config/rejects-missing-root".into(),
-        fixture: "empty-directory".into(),
-        action: "run-probe".into(),
-        args: vec![],
-        deadline_ms: 100,
-        leaves: vec![],
-    });
+    })));
+    let call = client.run(
+        &veridoc_protocol::RunRequest {
+            scenario_id: "config/rejects-missing-root".into(),
+            fixture: "empty-directory".into(),
+            action: "run-probe".into(),
+            args: vec![],
+            deadline_ms: 100,
+            leaves: vec![],
+        },
+        Duration::from_millis(100),
+    );
     assert_eq!(call.loss(), Some(Loss::NoAnswer));
 }
 
 #[test]
 fn an_empty_command_is_a_spawn_failure_naming_the_config_key() {
-    let err = PluginClient::spawn(&Launch::new(vec![])).unwrap_err();
-    assert_eq!(err, Loss::Spawn { detail: "empty plugin.command".to_string() });
+    // The mechanism owns the spawn now, so its own wording names the empty `command`; veridoc
+    // reports a spawn fault as the lost connection it is.
+    let err = PluginClient::connect(&Launch::new(vec![]), Duration::from_secs(30)).unwrap_err();
+    assert_eq!(
+        err,
+        ConnectError::Lost(Loss::Spawn {
+            detail: "the plugin's command is empty".to_string()
+        })
+    );
+}
+
+#[test]
+fn a_handshake_that_is_not_the_shape_of_the_version_it_declares_is_unusable() {
+    // The plugin declared `vd/1` and answered with an object that is not a vd/1 handshake: no
+    // `languages`. The mechanism reads only its four core fields and hands the rest of the object
+    // to the profile, so this is veridoc's own complaint about an answer it cannot read — the same
+    // `unusable-result` verdict any other method gets, carrying what was wrong — and not the
+    // version mismatch `UnsupportedVersion` would report, which the plugin never declared.
+    let err = PluginClient::connect(
+        &launch(Some(serde_json::json!({ "handshake": {
+            "protocolVersion": "vd/1",
+            "name": "shapeless",
+            "version": "0",
+            "capabilities": ["resolution"]
+        } }))),
+        Duration::from_secs(30),
+    )
+    .unwrap_err();
+    match err {
+        ConnectError::Lost(Loss::Profile { reason, detail }) => {
+            assert_eq!(reason, UNUSABLE_RESULT, "an unreadable handshake is unusable-result");
+            assert!(
+                detail.contains("languages"),
+                "the report names what was missing: {detail}"
+            );
+        }
+        other => panic!("expected an unusable-result loss, got {other:?}"),
+    }
 }

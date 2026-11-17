@@ -1,16 +1,20 @@
 //! JSON-RPC 2.0 framing: one message per line on stdio, request `id` as `u64`, eight methods.
 //!
 //! The framing itself — the envelope, the error codes, the line reader and writer, the loss
-//! reasons — lives in the `plugin_rpc` mechanism crate, which veridoc and autofuzz both drive,
-//! so it is re-exported here rather than restated. Only the eight method names below are
-//! veridoc's own: a plugin author writing in Rust imports this module, gets the framing for
-//! free, and answers the vocabulary this profile defines.
+//! reasons — and the stdio-process transport that starts a plugin and supervises it live in the
+//! `plugin_rpc` mechanism crate, which veridoc and autofuzz both drive, so both are re-exported
+//! here rather than restated. Only the eight method names below are veridoc's own: a plugin
+//! author writing in Rust imports this module, gets the framing for free, and answers the
+//! vocabulary this profile defines. The process transport is re-exported for the host side, so
+//! the engine names the mechanism's types through this one path too.
 
 pub use plugin_rpc::{
     buffered, buffered_writer, parse_request, parse_response, read_line, write_line, Call,
     ErrorObject, Failure, JsonRpcVersion, Loss, MessageError, MethodName, Request, Response,
     Success, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, PLUGIN_ERROR, UNUSABLE_RESULT,
 };
+
+pub use plugin_rpc::process::{Plugin, PluginConfig, StartError, Timeouts};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
