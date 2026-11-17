@@ -588,6 +588,13 @@ export interface VeridocPlugin {
 A missing capability is reported, never silently treated as a pass. A plugin that answers a leaf id the
 engine never issued is a run failure, so the routing is typed rather than hoped for.
 
+The same contract exists in machine-readable form in
+[`vd-1.profile.json`](../vd-1.profile.json): every method with the schema of its request and result, each
+capability with the sentence above, one loss reason for each way a plugin can go away, and each conformance
+rule with the scripted defect that shows the rule can fail. `prpc-core`, the runner the pluginrpc mechanism
+publishes, reads that file and starts each defect itself, so a rule's `verified` mark is a measurement taken
+against the fake plugin this repository builds rather than this document's word for itself.
+
 ## The report
 
 A failing run writes no artifact and prints `file:line:` diagnostics. A succeeding run writes
