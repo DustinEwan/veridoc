@@ -152,14 +152,52 @@ fn read_manifest(project: &Path) -> Result<Manifest, String> {
     serde_json::from_str(&text).map_err(|e| format!("veridoc-conformance.json is invalid: {e}"))
 }
 
+/// The committed schemas, embedded at compile time. The suite must validate with only the
+/// executable present — an installed binary has no repository tree to read — and the xtask
+/// drift test is what keeps these bytes equal to `docs/schema/vd-1`.
+const SCHEMAS: &[(&str, &str)] = &[
+    (
+        "handshake.json",
+        include_str!("../../../docs/schema/vd-1/handshake.json"),
+    ),
+    (
+        "collect-result.json",
+        include_str!("../../../docs/schema/vd-1/collect-result.json"),
+    ),
+    (
+        "resolve-result.json",
+        include_str!("../../../docs/schema/vd-1/resolve-result.json"),
+    ),
+    (
+        "derivable-result.json",
+        include_str!("../../../docs/schema/vd-1/derivable-result.json"),
+    ),
+    (
+        "bivalence-result.json",
+        include_str!("../../../docs/schema/vd-1/bivalence-result.json"),
+    ),
+    (
+        "cite-result.json",
+        include_str!("../../../docs/schema/vd-1/cite-result.json"),
+    ),
+    (
+        "surface-result.json",
+        include_str!("../../../docs/schema/vd-1/surface-result.json"),
+    ),
+    (
+        "run-response.json",
+        include_str!("../../../docs/schema/vd-1/run-response.json"),
+    ),
+];
+
 fn schema(name: &str) -> Result<jsonschema::Validator, String> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/schema/vd-1")
-        .join(name);
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("cannot read committed schema {}: {e}", path.display()))?;
-    let value: Value = serde_json::from_str(&text)
-        .map_err(|e| format!("committed schema {} is not JSON: {e}", path.display()))?;
+    let text = SCHEMAS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, text)| *text)
+        .ok_or_else(|| format!("no embedded schema {name}"))?;
+    let value: Value = serde_json::from_str(text)
+        .map_err(|e| format!("committed schema {name} is not JSON: {e}"))?;
     jsonschema::validator_for(&value).map_err(|e| format!("schema {name} is invalid: {e}"))
 }
 
