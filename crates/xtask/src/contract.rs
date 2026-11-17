@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use veridoc_protocol::{Capability, Method, PROTOCOL_VERSION};
+use veridoc_protocol::{Capability, Method, MethodName, PROTOCOL_VERSION};
 
 /// Method names as the Rust vocabulary spells them on the wire, in declaration order.
 fn protocol_methods() -> Vec<&'static str> {

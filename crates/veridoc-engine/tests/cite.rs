@@ -5,7 +5,7 @@
 use veridoc_engine::bind::{BindError, BoundChannel, BoundClaim};
 use veridoc_engine::cite::{self, CiteOutcome};
 use veridoc_engine::execute::Outcome;
-use veridoc_engine::plugin::LostReason;
+use veridoc_protocol::{Call, Loss};
 use veridoc_protocol::{CiteResult, Citation, Kind};
 
 fn citation_claim(store: &str, id: &str) -> BoundClaim {
@@ -28,9 +28,9 @@ fn citation_claim(store: &str, id: &str) -> BoundClaim {
     }
 }
 
-fn cite_ok(resolved: Vec<(String, String, Option<String>)>, unresolved: Vec<(String, String)>) -> impl Fn(&[Citation]) -> Result<CiteResult, LostReason> {
+fn cite_ok(resolved: Vec<(String, String, Option<String>)>, unresolved: Vec<(String, String)>) -> impl Fn(&[Citation]) -> Call<CiteResult> {
     move |_| {
-        Ok(CiteResult {
+        Call::Result(CiteResult {
             resolved: resolved
                 .iter()
                 .map(|(id, text, state)| veridoc_protocol::ResolvedCitation {
@@ -123,11 +123,11 @@ fn a_non_terminal_state_warns_without_failing_the_run() {
 fn a_transport_error_is_a_run_failure_not_a_soft_pass() {
     let result = cite::cite_all(
         &[citation_claim("session", "01a1e512")],
-        |_| Err(LostReason::Eof),
+        |_| Call::Lost(Loss::Eof),
         supported,
     );
     match result {
-        Err(detail) => assert!(detail.starts_with("citation store could not be reached")),
+        Err(detail) => assert!(detail.starts_with("citation store")),
         Ok(CiteOutcome { .. }) => panic!("a lost plugin must stop the run"),
     }
 }
@@ -159,7 +159,7 @@ fn every_citation_shares_one_call() {
         |requests| {
             *calls.borrow_mut() += 1;
             assert_eq!(requests.len(), 2, "both citations travel in one request");
-            Ok(CiteResult {
+            Call::Result(CiteResult {
                 resolved: requests
                     .iter()
                     .map(|r| veridoc_protocol::ResolvedCitation {

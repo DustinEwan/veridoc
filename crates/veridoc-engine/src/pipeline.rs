@@ -24,7 +24,7 @@ use crate::judge::{AnthropicJudge, CommandJudge, Judge, JudgeError};
 use crate::plugin::PluginClient;
 use crate::result::{self, ClaimResult, Metrics, Outcome as DocOutcome, ResultDocument};
 use crate::verdicts;
-use veridoc_protocol::{Capability, Kind, Method, RunFailureKind};
+use veridoc_protocol::{Call, Capability, Kind, Method, RunFailureKind};
 
 /// What the CLI prints and exits with.
 pub struct Report {
@@ -74,14 +74,13 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
         Ok(launch) => launch,
         Err(e) => return Report::run_failure(format!("run failed: plugin: {e}")),
     };
-    let (client, handshake) =
-        match PluginClient::connect(&launch, Duration::from_millis(config.plugin.handshake_timeout_ms))
-        {
-            Ok(pair) => pair,
-            Err(lost) => {
-                return Report::run_failure(format!("run failed: plugin: {lost}"));
-            }
-        };
+    let (client, handshake) = match PluginClient::connect(
+        &launch,
+        Duration::from_millis(config.plugin.handshake_timeout_ms),
+    ) {
+        Ok(pair) => pair,
+        Err(err) => return Report::run_failure(format!("run failed: plugin: {err}")),
+    };
     let caps = handshake.capabilities.clone();
     for required in [Capability::Collect, Capability::Resolution] {
         if !caps.contains(&required) {
@@ -102,8 +101,14 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
         Some(serde_json::json!({ "root": root.to_string_lossy() })),
         Duration::from_millis(config.plugin.collect_timeout_ms),
     ) {
-        Ok(raw) => raw,
-        Err(lost) => return Report::run_failure(format!("run failed: plugin: {lost}")),
+        Call::Result(raw) => raw,
+        Call::Refusal(error) => {
+            return Report::run_failure(format!(
+                "run failed: plugin: the plugin refused collect ({}): {}",
+                error.code, error.message
+            ))
+        }
+        Call::Lost(lost) => return Report::run_failure(format!("run failed: plugin: {lost}")),
     };
     let collect: CollectWire = match serde_json::from_value(raw) {
         Ok(collect) => collect,
@@ -412,7 +417,7 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
     // 13. The uncovered-symbol warning, or the inert line.
     if caps.contains(&Capability::Surface) {
         match client.surface() {
-            Ok(surface) => {
+            Call::Result(surface) => {
                 for referent in surface.referents.iter().filter(|r| r.public) {
                     if !claims.iter().any(|c| c.referent_id == referent.referent_id) {
                         warnings.push(crate::result::Warning {
@@ -426,7 +431,13 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
                     }
                 }
             }
-            Err(lost) => return Report::run_failure(format!("run failed: plugin: {lost}")),
+            Call::Refusal(error) => {
+                return Report::run_failure(format!(
+                    "run failed: plugin: the plugin refused surface ({}): {}",
+                    error.code, error.message
+                ))
+            }
+            Call::Lost(lost) => return Report::run_failure(format!("run failed: plugin: {lost}")),
         }
     } else {
         eprintln!(

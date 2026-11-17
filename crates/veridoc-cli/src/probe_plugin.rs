@@ -9,7 +9,7 @@ use serde_json::Value;
 use veridoc_engine::bind::CollectWire;
 use veridoc_engine::config;
 use veridoc_engine::hash;
-use veridoc_engine::plugin::PluginClient;
+use veridoc_engine::plugin::{sentence, PluginClient};
 use veridoc_protocol::Method;
 
 pub fn run(project: &Path) -> Result<i32, String> {
@@ -41,14 +41,17 @@ pub fn run(project: &Path) -> Result<i32, String> {
             .join(", "),
     );
 
-    let raw = match client.request::<Value>(
-        Method::Collect,
-        Some(serde_json::json!({ "root": root.to_string_lossy() })),
-        Duration::from_millis(loaded.config.plugin.collect_timeout_ms),
+    let raw = match sentence(
+        "collect",
+        client.request::<Value>(
+            Method::Collect,
+            Some(serde_json::json!({ "root": root.to_string_lossy() })),
+            Duration::from_millis(loaded.config.plugin.collect_timeout_ms),
+        ),
     ) {
         Ok(raw) => raw,
-        Err(lost) => {
-            eprintln!("run failed: plugin: {lost}");
+        Err(why) => {
+            eprintln!("run failed: plugin: {why}");
             return Ok(2);
         }
     };
@@ -67,10 +70,10 @@ pub fn run(project: &Path) -> Result<i32, String> {
             keys.push(key);
         }
     }
-    let resolved = match client.resolve(&keys) {
+    let resolved = match sentence("resolve", client.resolve(&keys)) {
         Ok(resolved) => resolved,
-        Err(lost) => {
-            eprintln!("run failed: plugin: {lost}");
+        Err(why) => {
+            eprintln!("run failed: plugin: {why}");
             return Ok(2);
         }
     };

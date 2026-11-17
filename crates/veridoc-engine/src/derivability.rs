@@ -3,10 +3,10 @@
 //! narrow — `docs/spec.md:160-163` says a checker that over-rejects teaches the author to
 //! disable it, so containment is never tried.
 
-use veridoc_protocol::Capability;
+use veridoc_protocol::{Call, Capability};
 
 use crate::bind::BoundClaim;
-use crate::plugin::LostReason;
+use crate::plugin::sentence;
 
 /// Lowercase, drop backticks, drop ASCII punctuation, collapse runs of whitespace, trim.
 pub fn normalize(text: &str) -> String {
@@ -45,7 +45,7 @@ pub fn gate(
     claims: Vec<BoundClaim>,
     plugin_name: &str,
     capabilities: &[Capability],
-    mut derivable: impl FnMut(&str) -> Result<veridoc_protocol::DerivableResult, LostReason>,
+    mut derivable: impl FnMut(&str) -> Call<veridoc_protocol::DerivableResult>,
 ) -> Result<Outcome, String> {
     if !capabilities.contains(&Capability::Derivability) {
         // The inert line belongs on stderr by the plan's capability table; the caller prints it.
@@ -67,18 +67,12 @@ pub fn gate(
             .find(|(referent, _)| referent == &claim.referent_id)
         {
             Some((_, facts)) => facts.clone(),
-            None => match derivable(&claim.referent_id) {
-                Ok(answer) => {
-                    facts_by_referent.push((claim.referent_id.clone(), answer.facts.clone()));
-                    answer.facts
-                }
-                Err(lost) => {
-                    return Err(format!(
-                        "derivability of {} could not be asked: {lost}",
-                        claim.referent_id
-                    ));
-                }
-            },
+            None => {
+                let answer = sentence("derivable", derivable(&claim.referent_id))
+                    .map_err(|why| format!("derivability of {}: {why}", claim.referent_id))?;
+                facts_by_referent.push((claim.referent_id.clone(), answer.facts.clone()));
+                answer.facts
+            }
         };
         let text = normalize(&claim.text);
         match facts.iter().find(|fact| normalize(fact) == text) {

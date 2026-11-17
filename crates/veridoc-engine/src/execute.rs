@@ -4,10 +4,10 @@
 
 use serde_json::Value;
 use veridoc_protocol::{
-    Asserts, Check, LeafAnswer, RunFailure, RunFailureKind, RunLeaf, RunRequest, RunResponse,
+    Asserts, Call, Check, LeafAnswer, Loss, RunFailure, RunFailureKind, RunLeaf, RunRequest,
+    RunResponse,
 };
 use crate::bind::{BoundChannel, BoundClaim};
-use crate::plugin::LostReason;
 
 /// The two readings a contradiction cannot separate (`docs/spec.md:362-366`). Both travel
 /// with every contradicted claim; a person or an agent chooses between them.
@@ -37,7 +37,7 @@ pub struct Executed {
 pub fn execute(
     claims: &[BoundClaim],
     deadline_ms: u64,
-    mut run: impl FnMut(&RunRequest) -> Result<RunResponse, LostReason>,
+    mut run: impl FnMut(&RunRequest) -> Call<RunResponse>,
 ) -> Result<Vec<Executed>, RunFailure> {
     let mut executed = Vec::new();
 
@@ -71,16 +71,27 @@ pub fn execute(
         };
 
         let response = match run(&request) {
-            Ok(response) => response,
+            Call::Result(response) => response,
             // A scenario that outlived its deadline is red with kind `deadline`; the prose
-            // is not blamed on a slow machine (`docs/spec.md:354`).
-            Err(LostReason::NoAnswer) => {
+            // is not blamed on a slow machine (`docs/spec.md:354`). Only a loss says nothing
+            // was answered. A refusal is an answer — the plugin is alive — so it is the
+            // plugin's own fault, kind `plugin`, and must not be read as a deadline.
+            Call::Lost(Loss::NoAnswer) => {
                 return Err(RunFailure {
                     kind: RunFailureKind::Deadline,
                     detail: format!("scenario {scenario_id} outlived {deadline_ms} ms"),
                 });
             }
-            Err(lost) => {
+            Call::Refusal(error) => {
+                return Err(RunFailure {
+                    kind: RunFailureKind::Plugin,
+                    detail: format!(
+                        "scenario {scenario_id}: the plugin refused run ({}): {}",
+                        error.code, error.message
+                    ),
+                });
+            }
+            Call::Lost(lost) => {
                 return Err(RunFailure {
                     kind: RunFailureKind::Plugin,
                     detail: format!("scenario {scenario_id}: {lost}"),

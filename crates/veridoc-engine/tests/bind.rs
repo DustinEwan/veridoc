@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 use veridoc_engine::bind::{self, BindFailure, CollectWire};
-use veridoc_engine::plugin::LostReason;
+use veridoc_protocol::{Call, Loss, UNUSABLE_RESULT};
 use veridoc_protocol::{Capability, ResolveResult};
 
 fn tmp_dir(name: &str) -> PathBuf {
@@ -58,9 +58,14 @@ fn all_capabilities() -> Vec<Capability> {
     ]
 }
 
-fn resolve_default(keys: &[String]) -> Result<ResolveResult, LostReason> {
+fn resolve_default(keys: &[String]) -> Call<ResolveResult> {
     let value = veridoc_fakeplugin::default_resolve(&json!({ "refs": keys }));
-    serde_json::from_value(value).map_err(|e| LostReason::Protocol(e.to_string()))
+    serde_json::from_value(value)
+        .map(Call::Result)
+        .unwrap_or_else(|e| Call::Lost(Loss::Profile {
+            reason: UNUSABLE_RESULT.to_string(),
+            detail: e.to_string(),
+        }))
 }
 
 fn run(

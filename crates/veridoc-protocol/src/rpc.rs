@@ -1,13 +1,19 @@
 //! JSON-RPC 2.0 framing: one message per line on stdio, request `id` as `u64`, eight methods.
 //!
-//! The framing helpers are shared by the engine client and by plugins written in Rust, so
-//! a plugin author does not reimplement line-delimited framing.
+//! The framing itself — the envelope, the error codes, the line reader and writer, the loss
+//! reasons — lives in the `plugin_rpc` mechanism crate, which veridoc and autofuzz both drive,
+//! so it is re-exported here rather than restated. Only the eight method names below are
+//! veridoc's own: a plugin author writing in Rust imports this module, gets the framing for
+//! free, and answers the vocabulary this profile defines.
 
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+pub use plugin_rpc::{
+    buffered, buffered_writer, parse_request, parse_response, read_line, write_line, Call,
+    ErrorObject, Failure, JsonRpcVersion, Loss, MessageError, MethodName, Request, Response,
+    Success, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, PLUGIN_ERROR, UNUSABLE_RESULT,
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 /// The eight methods a veridoc plugin may answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -23,8 +29,10 @@ pub enum Method {
     Surface,
 }
 
-impl Method {
-    pub fn name(&self) -> &'static str {
+/// The wire names a veridoc plugin answers. `from_wire` is what a plugin server uses to answer
+/// `METHOD_NOT_FOUND` for a name outside this vocabulary.
+impl MethodName for Method {
+    fn name(&self) -> &'static str {
         match self {
             Method::Handshake => "handshake",
             Method::Collect => "collect",
@@ -37,7 +45,7 @@ impl Method {
         }
     }
 
-    pub fn from_wire(name: &str) -> Option<Method> {
+    fn from_wire(name: &str) -> Option<Self> {
         match name {
             "handshake" => Some(Method::Handshake),
             "collect" => Some(Method::Collect),
@@ -50,171 +58,4 @@ impl Method {
             _ => None,
         }
     }
-}
-
-/// A request. `id` is assigned by the engine and echoed on the matching response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Request {
-    pub jsonrpc: JsonRpcVersion,
-    pub id: u64,
-    pub method: String,
-    /// `params` is omitted, not `null`, for `handshake` and `surface`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<serde_json::Value>,
-}
-
-impl Request {
-    pub fn new(id: u64, method: Method, params: impl Serialize) -> Self {
-        Request {
-            jsonrpc: JsonRpcVersion::V2,
-            id,
-            method: method.name().to_string(),
-            params: Some(serde_json::to_value(params).expect("request params are serializable")),
-        }
-    }
-
-    /// A method with no parameters.
-    pub fn empty(id: u64, method: Method) -> Self {
-        Request {
-            jsonrpc: JsonRpcVersion::V2,
-            id,
-            method: method.name().to_string(),
-            params: None,
-        }
-    }
-}
-
-/// The only protocol revision this build speaks.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum JsonRpcVersion {
-    #[default]
-    #[serde(rename = "2.0")]
-    V2,
-}
-
-/// A successful response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Success {
-    pub jsonrpc: JsonRpcVersion,
-    pub id: u64,
-    pub result: serde_json::Value,
-}
-
-/// An error response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ErrorObject {
-    pub code: i64,
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-}
-
-/// A failure response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Failure {
-    pub jsonrpc: JsonRpcVersion,
-    pub id: u64,
-    pub error: ErrorObject,
-}
-
-/// A response, discriminated by the presence of `result` or `error`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
-pub enum Response {
-    Success(Success),
-    Failure(Failure),
-}
-
-impl Response {
-    pub fn ok(id: u64, result: impl Serialize) -> Self {
-        Response::Success(Success {
-            jsonrpc: JsonRpcVersion::V2,
-            id,
-            result: serde_json::to_value(result).expect("result is serializable"),
-        })
-    }
-
-    pub fn err(id: u64, code: i64, message: impl Into<String>) -> Self {
-        Response::Failure(Failure {
-            jsonrpc: JsonRpcVersion::V2,
-            id,
-            error: ErrorObject {
-                code,
-                message: message.into(),
-                data: None,
-            },
-        })
-    }
-
-    pub fn id(&self) -> u64 {
-        match self {
-            Response::Success(s) => s.id,
-            Response::Failure(f) => f.id,
-        }
-    }
-}
-
-/// Anything that can go wrong on the pipe. A lost plugin is not an error to report to the
-/// user; callers map it onto a run failure.
-#[derive(Debug, Error)]
-pub enum FrameError {
-    #[error("io on the plugin pipe: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("message is not serializable: {0}")]
-    Encode(#[from] serde_json::Error),
-    #[error("malformed json-rpc line: {0}")]
-    Malformed(String),
-    #[error("plugin closed the pipe")]
-    Eof,
-}
-
-/// Write one message as a single line.
-pub fn write_line(writer: &mut impl Write, msg: &impl Serialize) -> Result<(), FrameError> {
-    let mut line = serde_json::to_string(msg)?;
-    line.push('\n');
-    writer.write_all(line.as_bytes())?;
-    writer.flush()?;
-    Ok(())
-}
-
-/// Read one message. `Ok(None)` means the peer closed the pipe or sent a blank line, which
-/// the engine treats as a lost plugin rather than an error.
-pub fn read_line(
-    reader: &mut impl BufRead,
-    buf: &mut String,
-) -> Result<Option<String>, FrameError> {
-    buf.clear();
-    let n = reader.read_line(buf)?;
-    if n == 0 {
-        return Ok(None);
-    }
-    let trimmed = buf.trim_end_matches(['\n', '\r']);
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(trimmed.to_string()))
-}
-
-/// Parse one response line.
-pub fn parse_response(line: &str) -> Result<Response, FrameError> {
-    serde_json::from_str(line).map_err(|e| FrameError::Malformed(format!("{e}: {line}")))
-}
-
-/// Parse one request line, as a plugin server does.
-pub fn parse_request(line: &str) -> Result<Request, FrameError> {
-    serde_json::from_str(line).map_err(|e| FrameError::Malformed(format!("{e}: {line}")))
-}
-
-/// A line reader over a byte stream, sized so a large `collect` payload does not thrash.
-pub fn buffered<R: Read>(read: R) -> BufReader<R> {
-    BufReader::with_capacity(1 << 16, read)
-}
-
-/// A line writer over a byte stream.
-pub fn buffered_writer<W: Write>(write: W) -> BufWriter<W> {
-    BufWriter::with_capacity(1 << 16, write)
 }

@@ -14,7 +14,7 @@ use veridoc_protocol::*;
 use crate::config::CitationStoreConfig;
 use crate::feature::{self, FeatureFile, FeatureProblemKind};
 use crate::hash;
-use crate::plugin::LostReason;
+use crate::plugin::sentence;
 use crate::result::Warning;
 use crate::spec_md::{self, SpecProblemKind};
 
@@ -375,7 +375,7 @@ pub fn bind(
     capabilities: &[Capability],
     citation_stores: &[CitationStoreConfig],
     collect: CollectWire,
-    mut resolve: impl FnMut(&[String]) -> Result<ResolveResult, LostReason>,
+    mut resolve: impl FnMut(&[String]) -> Call<ResolveResult>,
 ) -> Result<Bound, BindFailure> {
     let mut errors: Vec<BindError> = Vec::new();
     let mut warnings: Vec<Warning> = Vec::new();
@@ -407,10 +407,7 @@ pub fn bind(
     for action in &collect.actions {
         push_key(&mut keys, action.calls.key());
     }
-    let resolved = match resolve(&keys) {
-        Ok(resolved) => resolved,
-        Err(reason) => return Err(BindFailure::RunFailure(reason.to_string())),
-    };
+    let resolved = sentence("resolve", resolve(&keys)).map_err(BindFailure::RunFailure)?;
     let mut referents: BTreeMap<String, (String, String)> = BTreeMap::new();
     let mut unresolved: BTreeMap<String, String> = BTreeMap::new();
     for r in &resolved.resolved {

@@ -4,7 +4,7 @@
 
 use veridoc_engine::bivalence::{self, Outcome};
 use veridoc_engine::bind::{BindError, BoundChannel, BoundClaim};
-use veridoc_engine::plugin::LostReason;
+use veridoc_protocol::{Call, Loss};
 use veridoc_protocol::{Asserts, AssertLeaf, BivalenceMethod, BivalenceResult, Capability, Check};
 
 const ALL_CAPS: &[Capability] = &[
@@ -44,7 +44,7 @@ fn scenario_claim() -> BoundClaim {
 
 fn run(
     caps: &[Capability],
-    answer: Result<BivalenceResult, LostReason>,
+    answer: Call<BivalenceResult>,
 ) -> Result<Outcome, String> {
     bivalence::gate(vec![scenario_claim()], "veridoc-fakeplugin", caps, move |_| {
         answer.clone()
@@ -55,7 +55,7 @@ fn run(
 fn a_structurally_bivalent_claim_keeps_the_scenario_channel() {
     let outcome = run(
         ALL_CAPS,
-        Ok(BivalenceResult {
+        Call::Result(BivalenceResult {
             bivalent: true,
             method: BivalenceMethod::Structural,
             witness_accepts: None,
@@ -75,7 +75,7 @@ fn a_structurally_bivalent_claim_keeps_the_scenario_channel() {
 fn a_non_bivalent_claim_is_routed_to_the_judge_channel() {
     let outcome = run(
         ALL_CAPS,
-        Ok(BivalenceResult {
+        Call::Result(BivalenceResult {
             bivalent: false,
             method: BivalenceMethod::StaticAnalysis,
             witness_accepts: None,
@@ -92,7 +92,7 @@ fn a_non_bivalent_claim_is_routed_to_the_judge_channel() {
 fn witnesses_without_the_pair_is_a_bind_error_naming_the_reason() {
     let outcome = run(
         ALL_CAPS,
-        Ok(BivalenceResult {
+        Call::Result(BivalenceResult {
             bivalent: true,
             method: BivalenceMethod::Witnesses,
             witness_accepts: Some(true),
@@ -129,7 +129,7 @@ fn witnesses_require_the_pair_on_every_satisfies_leaf() {
         })],
     };
     let outcome = bivalence::gate(vec![claim], "p", ALL_CAPS, |_| {
-        Ok(BivalenceResult {
+        Call::Result(BivalenceResult {
             bivalent: true,
             method: BivalenceMethod::Witnesses,
             witness_accepts: Some(true),
@@ -146,9 +146,9 @@ fn witnesses_require_the_pair_on_every_satisfies_leaf() {
 
 #[test]
 fn a_plugin_error_is_a_run_failure_and_leaves_the_claim_unsettled() {
-    let result = run(ALL_CAPS, Err(LostReason::NoAnswer));
+    let result = run(ALL_CAPS, Call::Lost(Loss::NoAnswer));
     match result {
-        Err(detail) => assert!(detail.contains("could not be asked")),
+        Err(detail) => assert!(detail.contains("bivalence of claim")),
         Ok(_) => panic!("a plugin error must be a run failure"),
     }
 }
@@ -157,7 +157,7 @@ fn a_plugin_error_is_a_run_failure_and_leaves_the_claim_unsettled() {
 fn no_bivalence_capability_makes_the_scenario_claim_an_error() {
     let outcome = run(
         &[Capability::Collect, Capability::Resolution, Capability::Execution],
-        Ok(BivalenceResult {
+        Call::Result(BivalenceResult {
             bivalent: true,
             method: BivalenceMethod::Structural,
             witness_accepts: None,

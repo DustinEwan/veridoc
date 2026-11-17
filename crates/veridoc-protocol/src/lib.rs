@@ -14,15 +14,6 @@ pub const PROTOCOL_VERSION: &str = "vd/1";
 /// connect time, not misread at message time.
 pub const SUPPORTED_VERSIONS: &[&str] = &[PROTOCOL_VERSION];
 
-/// JSON-RPC parse error.
-pub const PARSE_ERROR: i64 = -32700;
-/// JSON-RPC invalid request.
-pub const INVALID_REQUEST: i64 = -32600;
-/// JSON-RPC method not found.
-pub const METHOD_NOT_FOUND: i64 = -32601;
-/// Application-level failure inside the plugin.
-pub const PLUGIN_ERROR: i64 = -32000;
-
 /// The committed schema directory for a protocol revision: `vd/1` becomes `vd-1`.
 pub fn schema_dir(version: &str) -> PathBuf {
     PathBuf::from(version.replace('/', "-"))

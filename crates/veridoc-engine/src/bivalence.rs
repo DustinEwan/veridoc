@@ -4,10 +4,10 @@
 //! channel, claims the plugin cannot settle go to the judge, and claims that are neither
 //! error. There is no third outcome.
 
-use veridoc_protocol::{Asserts, BivalenceMethod, BivalenceResult, Capability, Check};
+use veridoc_protocol::{Asserts, BivalenceMethod, BivalenceResult, Call, Capability, Check};
 
 use crate::bind::{BindError, BoundChannel, BoundClaim};
-use crate::plugin::LostReason;
+use crate::plugin::sentence;
 
 #[derive(Debug)]
 pub struct Outcome {
@@ -19,13 +19,14 @@ pub struct Outcome {
 }
 
 /// Classify every scenario-channel claim. `bivalence` is the plugin call, supplied by the
-/// caller. A plugin error or `LostReason` is a run failure — never a claim state — so the
-/// caller sees `Err` and stops the run with kind `plugin`.
+/// caller. A refusal or a loss is a run failure — never a claim state — so the caller sees
+/// `Err` and stops the run with kind `plugin`; `sentence` words the two differently, because a
+/// refusal means the plugin is alive and a loss means it is not.
 pub fn gate(
     claims: Vec<BoundClaim>,
     plugin_name: &str,
     capabilities: &[Capability],
-    mut bivalence: impl FnMut(&str) -> Result<BivalenceResult, LostReason>,
+    mut bivalence: impl FnMut(&str) -> Call<BivalenceResult>,
 ) -> Result<Outcome, String> {
     let mut errors: Vec<BindError> = Vec::new();
     let mut out = Vec::new();
@@ -47,12 +48,8 @@ pub fn gate(
             continue;
         }
 
-        let answer = match bivalence(&claim.id) {
-            Ok(answer) => answer,
-            Err(lost) => {
-                return Err(format!("bivalence of claim {} could not be asked: {lost}", claim.id));
-            }
-        };
+        let answer = sentence("bivalence", bivalence(&claim.id))
+            .map_err(|why| format!("bivalence of claim {}: {why}", claim.id))?;
 
         if !answer.bivalent {
             // Not bivalent is not a failure: the sentence is still worth judging, it just

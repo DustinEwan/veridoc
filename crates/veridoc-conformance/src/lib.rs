@@ -24,8 +24,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use veridoc_engine::hash;
-use veridoc_engine::plugin::{Launch, PluginClient};
-use veridoc_protocol::{contract::*, Method, METHOD_NOT_FOUND, PROTOCOL_VERSION};
+use veridoc_engine::plugin::{sentence, Launch, PluginClient};
+use veridoc_protocol::{contract::*, Method, MethodName, METHOD_NOT_FOUND, PROTOCOL_VERSION};
 
 /// Every rule the suite can report, in the order it drives them.
 pub const RULES: &[&str] = &[
@@ -222,9 +222,8 @@ fn call_ok<T: serde::de::DeserializeOwned>(
     timeout: Duration,
     validator: &jsonschema::Validator,
 ) -> Result<T, String> {
-    let raw = client
-        .request::<Value>(method, params, timeout)
-        .map_err(|e| e.to_string())?;
+    let name = method.name();
+    let raw = sentence(name, client.request::<Value>(method, params, timeout))?;
     if let Some(err) = schema_error(validator, &raw) {
         return Err(format!("answer is not schema-valid: {err}"));
     }
@@ -695,9 +694,7 @@ fn run_scenario(
         leaves,
     };
     let params = serde_json::to_value(&request).expect("RunRequest is serializable");
-    let raw = client
-        .request::<Value>(Method::Run, Some(params), deadline)
-        .map_err(|e| e.to_string())?;
+    let raw = sentence("run", client.request::<Value>(Method::Run, Some(params), deadline))?;
     let validator = schema("run-response.json")?;
     if let Some(err) = schema_error(&validator, &raw) {
         return Err(format!("answer is not schema-valid: {err}"));

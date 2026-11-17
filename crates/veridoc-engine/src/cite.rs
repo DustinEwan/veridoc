@@ -3,11 +3,11 @@
 //! text supports the reason is the same S2 comparison the judge already makes, so this
 //! module takes a judge callback rather than a model client.
 
-use veridoc_protocol::{CiteResult, Citation};
+use veridoc_protocol::{Call, CiteResult, Citation};
 
 use crate::bind::{BindError, BoundChannel, BoundClaim};
 use crate::execute::Outcome;
-use crate::plugin::LostReason;
+use crate::plugin::sentence;
 use crate::result::Warning;
 
 /// A citation state the engine treats as settled. The vocabulary is the engine's because the
@@ -45,13 +45,13 @@ pub struct CiteOutcome {
     pub warnings: Vec<Warning>,
 }
 
-/// Cite every `because` claim in one call. A transport error or `LostReason` is a run
+/// Cite every `because` claim in one call. A transport error, a refusal, or a loss is a run
 /// failure — `docs/spec.md:404` refuses a soft pass — and `Err` carries its detail.
 /// `judge` answers whether the cited text supports the claim's sentence, supplied by the
 /// caller so the verdict cache and the model client stay outside this module.
 pub fn cite_all(
     claims: &[BoundClaim],
-    mut cite: impl FnMut(&[Citation]) -> Result<CiteResult, LostReason>,
+    mut cite: impl FnMut(&[Citation]) -> Call<CiteResult>,
     mut judge: impl FnMut(&BoundClaim, &str) -> Outcome,
 ) -> Result<CiteOutcome, String> {
     let citing: Vec<&BoundClaim> = claims
@@ -74,10 +74,7 @@ pub fn cite_all(
         })
         .collect();
 
-    let answer = match cite(&requests) {
-        Ok(answer) => answer,
-        Err(lost) => return Err(format!("citation store could not be reached: {lost}")),
-    };
+    let answer = sentence("cite", cite(&requests)).map_err(|why| format!("citation store: {why}"))?;
 
     let mut out = CiteOutcome::default();
     for claim in citing {

@@ -289,13 +289,13 @@ pub fn serve(reader: impl BufRead, writer: &mut impl Write) {
     while let Ok(Some(line)) = read_line(&mut reader, &mut buf) {
         let Ok(req) = parse_request(&line) else {
             // A malformed request is answered with a parse error, as the TypeScript plugin is.
-            let _ = write_line(writer, &Response::err(0, PARSE_ERROR, "malformed json"));
+            let _ = write_line(writer, &Response::refusal(0, PARSE_ERROR, "malformed json"));
             continue;
         };
         let Some(method) = Method::from_wire(&req.method) else {
             let _ = write_line(
                 writer,
-                &Response::err(
+                &Response::refusal(
                     req.id,
                     METHOD_NOT_FOUND,
                     format!("unknown method {}", req.method),
@@ -325,6 +325,6 @@ pub fn serve(reader: impl BufRead, writer: &mut impl Write) {
             Some(override_result) if !override_result.is_null() => override_result.clone(),
             _ => default_result(method, &params),
         };
-        let _ = write_line(writer, &Response::ok(req.id, result));
+        let _ = write_line(writer, &Response::result(req.id, result));
     }
 }

@@ -1,9 +1,10 @@
 //! Engine-side plugin client: one plugin process, JSON-RPC over its stdio.
 //!
 //! The rule this file exists to enforce is that a plugin is a fallible peer. A slow answer,
-//! EOF, an exit, and an engine kill are all [`LostReason`]s, and every one of them is a run
-//! failure: the CLI prints `run failed: {kind}: {detail}` on stderr and exits 2, and no claim
-//! is given an outcome. A lost plugin never becomes a claim state.
+//! EOF, an exit, and an engine kill are all [`Loss`]es, and every one of them is a run
+//! failure: the CLI prints `run failed: {kind}: {detail}` on cli stderr and exits 2, and no claim
+//! is given an outcome. A refusal is not a loss: the plugin answered, so it is a run failure
+//! too, but it says the process is alive. A lost plugin never becomes a claim state.
 //!
 //! Two deliberate departures from autofuzz, recorded so an implementer does not "fix" them
 //! back:
@@ -56,50 +57,59 @@ impl Launch {
     }
 }
 
-/// Why a call did not get an answer. Every variant is a run failure; none is a claim state.
+/// Whether the plugin is running and version-checked, or it is not. A version mismatch is
+/// veridoc's own rule, not a mechanism loss: the plugin answered the handshake correctly and this
+/// engine declined it. A handshake refusal is neither of those: the plugin answered that it will
+/// not be a veridoc plugin, and its process is alive.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LostReason {
-    /// The request was answered by nothing within its deadline.
-    NoAnswer,
-    /// The plugin closed stdout without answering.
-    Eof,
-    /// The plugin exited without answering.
-    Exited {
-        code: Option<i32>,
-        signal: Option<i32>,
-    },
-    /// The engine killed the plugin.
-    Killed,
-    /// The process could not be spawned, or the engine's pipe to it closed.
-    Spawn(String),
-    /// A JSON-RPC error frame, a malformed answer, or a protocol-version refusal. The run
-    /// failure carries `kind: "plugin"`.
-    Protocol(String),
+pub enum ConnectError {
+    /// The plugin could not be started, or gave no handshake answer.
+    Lost(Loss),
+    /// The plugin answered the handshake with an error frame. It is running and it declined to be
+    /// version-checked, which is a different thing to tell an operator than a plugin that never
+    /// answered.
+    Refused { code: i64, message: String },
+    /// The plugin answered the handshake with a protocol revision this engine does not speak.
+    UnsupportedVersion { reported: String },
 }
 
-impl std::fmt::Display for LostReason {
+impl std::fmt::Display for ConnectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LostReason::NoAnswer => write!(f, "the plugin did not answer before its deadline"),
-            LostReason::Eof => write!(f, "the plugin closed the pipe"),
-            LostReason::Exited {
-                code: Some(code),
-                signal: None,
-            } => write!(f, "the plugin exited with code {code}"),
-            LostReason::Exited {
-                code: None,
-                signal: Some(signal),
-            } => write!(f, "the plugin exited on signal {signal}"),
-            LostReason::Exited { .. } => write!(f, "the plugin exited"),
-            LostReason::Killed => write!(f, "the plugin was killed after its deadline"),
-            LostReason::Spawn(why) => write!(f, "cannot spawn the plugin: {why}"),
-            LostReason::Protocol(why) => write!(f, "plugin error: {why}"),
+            ConnectError::Lost(loss) => write!(f, "{loss}"),
+            ConnectError::Refused { code, message } => {
+                write!(f, "plugin refused the handshake ({code}): {message}")
+            }
+            ConnectError::UnsupportedVersion { reported } => write!(
+                f,
+                "plugin reported protocol \"{reported}\"; this engine speaks \"{PROTOCOL_VERSION}\""
+            ),
         }
     }
 }
 
-/// Either a decoded answer, or the reason there is none.
-pub type Call<T> = Result<T, LostReason>;
+impl From<Loss> for ConnectError {
+    fn from(loss: Loss) -> Self {
+        ConnectError::Lost(loss)
+    }
+}
+
+/// One plugin call as a sentence, for a caller whose own failure channel is a `String` rather
+/// than a [`Call`]. A refusal and a loss both mean no payload, but they are different fixes:
+/// the plugin answered that it will not do the work, or the plugin did not answer at all. The
+/// two must not read the same, because a refusal means the process is alive and nothing that
+/// restarts it should fire — so the wording names the plugin's own message for a refusal and
+/// the loss reason for a loss, and a caller that branches on liveness uses `Call` directly.
+pub fn sentence<T>(what: &str, call: Call<T>) -> Result<T, String> {
+    match call {
+        Call::Result(value) => Ok(value),
+        Call::Refusal(error) => Err(format!(
+            "plugin refused {what} ({}): {}",
+            error.code, error.message
+        )),
+        Call::Lost(loss) => Err(format!("plugin did not {what}: {loss}")),
+    }
+}
 
 /// The engine owns the kill timer; the grace is how long a killed plugin gets to die before
 /// the engine stops waiting on it.
@@ -112,24 +122,17 @@ pub const SHORT_TIMEOUT: Duration = Duration::from_secs(30);
 /// The loss reason plus the requests still in flight, under one lock so a waiter is woken
 /// with the reason already recorded.
 struct State {
-    lost: Option<LostReason>,
+    lost: Option<Loss>,
     slots: BTreeMap<u64, mpsc::Sender<Response>>,
 }
 
 impl State {
-    /// Record `reason` unless a more specific one is already recorded, then wake waiters.
-    fn lose(&mut self, reason: LostReason) {
-        let replace = match &self.lost {
-            None => true,
-            // The engine's own kill outranks the exit status that kill produced, and a real
-            // exit status outranks the EOF the reader noticed first.
-            Some(LostReason::Killed) => false,
-            Some(LostReason::Eof) => !matches!(reason, LostReason::Eof),
-            Some(_) => false,
-        };
-        if replace {
-            self.lost = Some(reason);
-        }
+    /// Record `reason`, keeping the first cause the mechanism's precedence rules allow, then
+    /// wake waiters. `Loss::resolve` is what gives the engine's own `Killed` precedence over
+    /// the exit status that kill produced, and lets the reaper's exit status replace the
+    /// reader's placeholder `Eof`.
+    fn lose(&mut self, reason: Loss) {
+        self.lost = Some(Loss::resolve(self.lost.take(), reason));
         self.slots.clear();
     }
 }
@@ -147,26 +150,42 @@ pub struct PluginClient {
 }
 
 impl PluginClient {
-    /// Spawn, handshake, and check the protocol version. A spawn failure or a version
-    /// refusal is a run failure the caller reports; the engine never speaks to a plugin it
-    /// did not version-check.
-    pub fn connect(launch: &Launch, handshake_timeout: Duration) -> Result<(PluginClient, Handshake), LostReason> {
+    /// Spawn, handshake, and check the protocol version. A spawn failure or a handshake that gave
+    /// no answer is a [`ConnectError::Lost`]; an error frame on the handshake is a
+    /// [`ConnectError::Refused`]; a revision this engine does not speak is
+    /// [`ConnectError::UnsupportedVersion`]. The engine never speaks to a plugin it did not
+    /// version-check.
+    pub fn connect(
+        launch: &Launch,
+        handshake_timeout: Duration,
+    ) -> Result<(PluginClient, Handshake), ConnectError> {
         let client = PluginClient::spawn(launch)?;
-        let handshake: Handshake = client.handshake(handshake_timeout)?;
+        let handshake = match client.handshake(handshake_timeout) {
+            Call::Result(h) => h,
+            // A plugin that answers the handshake with an error frame is running and has declined
+            // to be a veridoc plugin. That is neither a lost connection nor a version the engine
+            // declined, and folding it into either would tell the operator the wrong thing.
+            Call::Refusal(error) => {
+                return Err(ConnectError::Refused {
+                    code: error.code,
+                    message: error.message,
+                })
+            }
+            Call::Lost(loss) => return Err(ConnectError::Lost(loss)),
+        };
         if !SUPPORTED_VERSIONS.contains(&handshake.protocol_version.as_str()) {
-            return Err(LostReason::Protocol(format!(
-                "plugin reported protocol \"{}\"; this engine speaks \"{PROTOCOL_VERSION}\"",
-                handshake.protocol_version
-            )));
+            return Err(ConnectError::UnsupportedVersion {
+                reported: handshake.protocol_version,
+            });
         }
         Ok((client, handshake))
     }
 
-    /// Start the plugin. A spawn failure is reported as `LostReason::Spawn`, so the caller
+    /// Start the plugin. A spawn failure is reported as `Loss::Spawn`, so the caller
     /// reports it like any other plugin loss.
-    pub fn spawn(launch: &Launch) -> Result<PluginClient, LostReason> {
+    pub fn spawn(launch: &Launch) -> Result<PluginClient, Loss> {
         let Some(program) = launch.argv.first() else {
-            return Err(LostReason::Spawn("empty plugin.command".to_string()));
+            return Err(Loss::Spawn { detail: "empty plugin.command".to_string() });
         };
         let mut cmd = Command::new(program);
         cmd.args(launch.argv.iter().skip(1))
@@ -179,7 +198,7 @@ impl PluginClient {
         }
         let mut child = match cmd.spawn() {
             Ok(child) => child,
-            Err(e) => return Err(LostReason::Spawn(format!("{}: {e}", launch.display()))),
+            Err(e) => return Err(Loss::Spawn { detail: format!("{}: {e}", launch.display()) }),
         };
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
@@ -219,17 +238,17 @@ impl PluginClient {
     }
 
     /// The recorded loss, if the process is gone. Requests made after this fail immediately.
-    pub fn lost(&self) -> Option<LostReason> {
+    pub fn lost(&self) -> Option<Loss> {
         self.state.lock().expect("state lock").lost.clone()
     }
 
     /// Kill the plugin now and wait for the exit. Any call in flight resolves as
-    /// `LostReason::Killed`.
+    /// `Loss::Killed`.
     pub fn kill(&self) {
         self.state
             .lock()
             .expect("state lock")
-            .lose(LostReason::Killed);
+            .lose(Loss::Killed);
         let (ack_tx, ack_rx) = mpsc::channel();
         // A full or closed channel means the reaper already finished: the process is gone.
         if self.kill.send(ack_tx).is_ok() {
@@ -249,7 +268,7 @@ impl PluginClient {
         {
             let mut state = self.state.lock().expect("state lock");
             if let Some(reason) = state.lost.clone() {
-                return Err(reason);
+                return Call::Lost(reason);
             }
             state.slots.insert(id, tx);
         }
@@ -269,10 +288,10 @@ impl PluginClient {
             // the reader's earlier `closed the pipe`.
             let reason = self
                 .await_exit_reason(Duration::from_millis(250))
-                .unwrap_or_else(|| {
-                    LostReason::Spawn(format!("pipe to {} closed: {e}", self.launch.display()))
+                .unwrap_or_else(|| Loss::Spawn {
+                    detail: format!("pipe to {} closed: {e}", self.launch.display()),
                 });
-            return Err(reason);
+            return Call::Lost(reason);
         }
 
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -282,32 +301,18 @@ impl PluginClient {
                 self.drop_slot(id);
                 // A recorded loss is more specific than "slow": the plugin died while we
                 // waited, and the caller should classify the death, not the timeout.
-                return Err(self.lost().unwrap_or(LostReason::NoAnswer));
+                return Call::Lost(self.lost().unwrap_or(Loss::NoAnswer));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 self.drop_slot(id);
-                return Err(self
-                    .await_exit_reason(Duration::from_millis(250))
-                    .unwrap_or(LostReason::Eof));
+                return Call::Lost(
+                    self.await_exit_reason(Duration::from_millis(250))
+                        .unwrap_or(Loss::Eof),
+                );
             }
         };
 
-        match response {
-            Response::Success(s) => serde_json::from_value(s.result).map_err(|e| {
-                LostReason::Protocol(format!(
-                    "{} replied malformed json to {}: {e}",
-                    self.launch.display(),
-                    method.name()
-                ))
-            }),
-            Response::Failure(f) => Err(LostReason::Protocol(format!(
-                "{} failed {} ({}): {}",
-                self.launch.display(),
-                method.name(),
-                f.error.code,
-                f.error.message
-            ))),
-        }
+        response.into_call::<T>()
     }
 
     fn drop_slot(&self, id: u64) {
@@ -316,12 +321,12 @@ impl PluginClient {
 
     /// The reaper records the exit status a poll interval after the reader notices a closed
     /// pipe. Wait that long for the specific reason before settling for a generic one.
-    fn await_exit_reason(&self, grace: Duration) -> Option<LostReason> {
+    fn await_exit_reason(&self, grace: Duration) -> Option<Loss> {
         let until = Instant::now() + grace;
         loop {
             match self.lost() {
                 // EOF is the reader's placeholder; the reaper's exit status is the truth.
-                Some(LostReason::Eof) if Instant::now() < until => {
+                Some(Loss::Eof) if Instant::now() < until => {
                     std::thread::sleep(Duration::from_millis(5));
                 }
                 reason => return reason,
@@ -476,7 +481,7 @@ fn spawn_reader(stdout: std::process::ChildStdout, state: Arc<Mutex<State>>) {
                 }
             }
             // A closed pipe is how a plugin dies when no exit status is readable yet.
-            state.lock().expect("state lock").lose(LostReason::Eof);
+            state.lock().expect("state lock").lose(Loss::Eof);
         })
         .expect("spawn reader");
 }
@@ -508,11 +513,11 @@ fn spawn_reaper(
                 }
             };
             let reason = match status {
-                Ok(status) => LostReason::Exited {
+                Ok(status) => Loss::Exited {
                     code: exit_code(&status),
                     signal: exit_signal(&status),
                 },
-                Err(_) => LostReason::Eof,
+                Err(_) => Loss::Eof,
             };
             state.lock().expect("state lock").lose(reason);
             let _ = done_tx.send(());
