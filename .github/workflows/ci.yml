@@ -64,6 +64,35 @@ jobs:
           target/release/veridoc install-plugin "$repo"
           target/release/veridoc plugins | grep -q '^veridoc-fakeplugin '
 
+  # The wire contract, checked by the published mechanism runner rather than by this
+  # repository's own binary: `prpc-core` installed from crates.io drives the fake plugin
+  # through the six wire rules, then runs each scripted defect in `vd-1.profile.json` and
+  # takes the profile's `verified` mark away from any rule whose defect did not fire. The
+  # profile rules themselves still run through `veridoc validate-plugin --out`, because they
+  # read the fixture the plugin's emitter renders.
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the CLI and the fake plugin
+        run: cargo build --release -p veridoc-cli -p veridoc-fakeplugin
+
+      - name: Conformance (prpc-core)
+        run: |
+          set -eu
+          export PATH="$PWD/target/release:$PATH"
+          cargo install plugin-rpc --bin prpc-core --version 0.1.0-alpha.11 --locked
+          printf '%s\n' \
+            '{' \
+            '  "name": "veridoc-fakeplugin",' \
+            '  "command": ["'"$PWD"'/target/release/veridoc-fakeplugin"],' \
+            '  "conformance": { "emitter": ["'"$PWD"'/target/release/veridoc-fakeplugin", "--emit-conformance"] }' \
+            '}' > /tmp/vd-harness.json
+          prpc-core vd-1.profile.json /tmp/vd-harness.json --suite
+
   # `curl | sh` runs this file with sh, which is dash on Debian and Ubuntu, so a bashism
   # breaks the installer silently. shellcheck plus a real dash parse is the gate.
   installer:
