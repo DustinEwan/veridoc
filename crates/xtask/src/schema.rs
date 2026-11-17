@@ -56,8 +56,20 @@ pub fn write_schemas(dir: &Path) -> Result<Vec<String>, String> {
     emit(
         dir,
         &mut written,
+        "collect-req",
+        &schema_for!(veridoc_protocol::CollectReq),
+    )?;
+    emit(
+        dir,
+        &mut written,
         "collect-result",
         &schema_for!(veridoc_protocol::CollectResult),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "resolve-req",
+        &schema_for!(veridoc_protocol::ResolveReq),
     )?;
     emit(
         dir,
@@ -68,8 +80,20 @@ pub fn write_schemas(dir: &Path) -> Result<Vec<String>, String> {
     emit(
         dir,
         &mut written,
+        "derivable-req",
+        &schema_for!(veridoc_protocol::DerivableReq),
+    )?;
+    emit(
+        dir,
+        &mut written,
         "derivable-result",
         &schema_for!(veridoc_protocol::DerivableResult),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "bivalence-req",
+        &schema_for!(veridoc_protocol::BivalenceReq),
     )?;
     emit(
         dir,
@@ -100,6 +124,12 @@ pub fn write_schemas(dir: &Path) -> Result<Vec<String>, String> {
         &mut written,
         "run-failure-kind",
         &schema_for!(veridoc_protocol::RunFailureKind),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "cite-req",
+        &schema_for!(veridoc_protocol::CiteReq),
     )?;
     emit(dir, &mut written, "cite-result", &schema_for!(veridoc_protocol::CiteResult))?;
     emit(

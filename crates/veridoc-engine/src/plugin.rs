@@ -248,12 +248,7 @@ impl PluginClient {
     }
 
     /// Send one request and wait for the matching response.
-    pub fn request<T>(
-        &self,
-        method: Method,
-        params: Option<Value>,
-        timeout: Duration,
-    ) -> Call<T>
+    pub fn request<T>(&self, method: Method, params: Option<Value>, timeout: Duration) -> Call<T>
     where
         T: serde::de::DeserializeOwned,
     {
@@ -344,37 +339,6 @@ pub fn plugin_said(lines: &[String]) -> Vec<String> {
         }
     }
     seen
-}
-
-// The `params` shapes of the four requests the spec writes inline.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CollectReq {
-    root: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ResolveReq {
-    refs: Vec<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DerivableReq {
-    referent_id: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BivalenceReq {
-    claim_id: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CiteReq {
-    citations: Vec<Citation>,
 }
 
 /// A plugin client is mostly OS handles, so `Debug` reports what identifies it and nothing else.

@@ -87,7 +87,7 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
             return Report::run_failure(format!(
                 "run failed: plugin: plugin \"{}\" declares no {}",
                 handshake.name,
-                cap_name(required)
+                required.name()
             ));
         }
     }
@@ -942,17 +942,5 @@ fn build_document(
         concepts: bound.concepts.clone(),
         warnings: warnings.to_vec(),
         metrics,
-    }
-}
-
-fn cap_name(capability: Capability) -> &'static str {
-    match capability {
-        Capability::Collect => "collect",
-        Capability::Resolution => "resolution",
-        Capability::Derivability => "derivability",
-        Capability::Bivalence => "bivalence",
-        Capability::Execution => "execution",
-        Capability::Citation => "citation",
-        Capability::Surface => "surface",
     }
 }

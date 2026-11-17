@@ -36,6 +36,23 @@ pub enum Capability {
     Surface,
 }
 
+impl Capability {
+    /// The wire spelling, the one the handshake answers with, the key the profile spec's
+    /// `capabilities` block is keyed by, and the name a report blames when a rule was gated on
+    /// a capability the plugin did not declare.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Capability::Collect => "collect",
+            Capability::Resolution => "resolution",
+            Capability::Derivability => "derivability",
+            Capability::Bivalence => "bivalence",
+            Capability::Execution => "execution",
+            Capability::Citation => "citation",
+            Capability::Surface => "surface",
+        }
+    }
+}
+
 /// The five claim kinds. The distinction the kinds carry is normative against observational.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -261,6 +278,13 @@ pub struct Skipped {
     pub reason: String,
 }
 
+/// The `params` of `collect`: the one project root the plugin indexes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CollectReq {
+    pub root: String,
+}
+
 /// What `collect` reports: the index, the raw claims, and the observable/action vocabulary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -272,6 +296,14 @@ pub struct CollectResult {
     pub actions: Vec<ActionDecl>,
     pub fixtures: Vec<String>,
     pub skipped: Vec<Skipped>,
+}
+
+/// The `params` of `resolve`: the keys to settle, each a `symbol:<name>#<from-file>` or
+/// `concept:<name>` key taken from a claim's referent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolveReq {
+    pub refs: Vec<String>,
 }
 
 /// The answer for one requested reference.
@@ -300,6 +332,14 @@ pub struct ResolveResult {
     pub unresolved: Vec<UnresolvedRef>,
 }
 
+/// The `params` of `derivable`: the referent whose declaration is read for the facts a reader
+/// can already see in it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DerivableReq {
+    pub referent_id: String,
+}
+
 /// The facts about one referent a reader can already see in the declaration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -317,6 +357,13 @@ pub enum BivalenceMethod {
     StaticAnalysis,
     #[serde(rename = "witnesses")]
     Witnesses,
+}
+
+/// The `params` of `bivalence`: the claim whose predicates must each settle to one value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BivalenceReq {
+    pub claim_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -408,6 +455,13 @@ pub struct ResolvedCitation {
 pub struct UnresolvedCitation {
     pub id: String,
     pub reason: String,
+}
+
+/// The `params` of `cite`: the citations to resolve against their declared stores.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CiteReq {
+    pub citations: Vec<Citation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
