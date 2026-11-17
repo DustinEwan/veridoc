@@ -22,8 +22,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 schemars = "1.2.3"
 thiserror = "2.0.21"
-# 0.1.0-alpha.8 is the revision whose `--suite` runner this profile's suite program answers to.
-plugin-rpc = "0.1.0-alpha.8"
+# The suite program writes the verdict file `prpc-core` reads, so this pin is the revision
+# `.github/workflows/ci.yml` installs: the two must agree on that shape.
+plugin-rpc = "0.1.0-alpha.11"
 sha2 = "0.11.1"
 # Only the Anthropic judge transport makes HTTP; rustls keeps it off OpenSSL.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
