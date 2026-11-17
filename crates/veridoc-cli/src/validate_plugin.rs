@@ -9,12 +9,30 @@
 //! `install` steps: an author's inner loop costs one compile and never a dependency
 //! reinstall, and a build step recompiles from current source on every run, which is
 //! what keeps a pass honest. `veridoc install-plugin` runs both before it records.
+//!
+//! `--out <dir>` is the same suite in the role the pluginrpc mechanism calls its suite
+//! program: the mechanism writes the profile spec, the plugin manifest, and the profile's
+//! schemas into `<dir>`, and this writes `<dir>/verdicts.json` back. That mode takes no
+//! plugin argument, because the manifest the mechanism wrote names one, and it prints no
+//! report, because `verdicts.json` is the output (spec §12 item 6).
 
 use std::path::PathBuf;
 
 use veridoc_engine::{install, plugins};
 
-pub fn run(plugin: Option<&str>) -> Result<i32, String> {
+pub fn run(plugin: Option<&str>, out: Option<PathBuf>) -> Result<i32, String> {
+    if let Some(dir) = out {
+        // A suite error returns `Err` and writes no file, which is how §12 item 5 keeps the
+        // suite's own failure — an unreadable spec, a plugin that will not start — off the
+        // plugin's record.
+        let verdicts = veridoc_conformance::suite::run(&dir)?;
+        eprintln!(
+            "wrote {} verdicts to {}",
+            verdicts.len(),
+            dir.join("verdicts.json").display()
+        );
+        return Ok(0);
+    }
     let arg = plugin.unwrap_or(".");
     let (name, root, argv, emitter, deadline_ms) = match plugins::lookup(arg) {
         Some(record) => {
@@ -80,7 +98,7 @@ pub fn run(plugin: Option<&str>) -> Result<i32, String> {
             )
         }
     };
-    let report = crate::install_plugin::drive(&name, &root, &argv, &emitter, deadline_ms)?;
+    let report = veridoc_conformance::drive(&name, &root, &argv, &emitter, deadline_ms)?;
     println!("{name}:");
     print!("{}", report.render());
     Ok(if report.passed() { 0 } else { 1 })

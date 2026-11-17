@@ -3,10 +3,8 @@
 //! passes, so a broken new version cannot take down a project that names the plugin.
 
 use std::path::PathBuf;
-use std::process::Command;
 
 use veridoc_engine::install::{self, Staged};
-use veridoc_engine::plugin::Launch;
 use veridoc_engine::plugins::{self, InstalledConformance, InstalledPlugin};
 
 pub fn run(url: &str, reference: Option<&str>, name: Option<&str>) -> Result<i32, String> {
@@ -46,7 +44,7 @@ fn finish(staged: &Staged, url: &str, name: Option<&str>) -> Result<(), String> 
         .into_iter()
         .map(PathBuf::from)
         .collect();
-    let report = drive(
+    let report = veridoc_conformance::drive(
         &manifest_name,
         &staged.path,
         &argv,
@@ -104,47 +102,4 @@ fn finish(staged: &Staged, url: &str, name: Option<&str>) -> Result<(), String> 
         &record.commit[..record.commit.len().min(12)]
     );
     Ok(())
-}
-
-/// Render the conformance fixture with the plugin's emitter and drive the suite against the
-/// plugin as the registry would launch it. Shared with `veridoc validate-plugin`.
-pub(crate) fn drive(
-    name: &str,
-    root: &std::path::Path,
-    argv: &[String],
-    emitter: &[PathBuf],
-    deadline_ms: Option<u64>,
-) -> Result<veridoc_conformance::Report, String> {
-    let (program, args) = emitter
-        .split_first()
-        .ok_or(format!("plugin \"{name}\" declares an empty emitter argv"))?;
-    let fixture = plugins::root().join(format!(".conformance-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&fixture);
-    // The emitter prints the directory it rendered; that line is the plugin's protocol with
-    // its own driver, not veridoc's output, so it is captured and discarded.
-    let rendered = Command::new(program)
-        .args(args)
-        .args(["--out".to_string(), fixture.display().to_string()])
-        .current_dir(root)
-        .output()
-        .map_err(|e| format!("cannot run the conformance emitter: {e}"))?;
-    if !rendered.status.success() {
-        let _ = std::fs::remove_dir_all(&fixture);
-        return Err(format!(
-            "the conformance emitter of plugin \"{name}\" exited {}: {}",
-            rendered.status,
-            String::from_utf8_lossy(&rendered.stderr).trim()
-        ));
-    }
-    let mut launch = Launch::new(argv.to_vec());
-    // The plugin runs with the rendered fixture as its working directory, as a check runs it
-    // with the project it collects.
-    launch.cwd = Some(fixture.display().to_string());
-    let report = veridoc_conformance::run(&veridoc_conformance::Check {
-        launch,
-        project: fixture.clone(),
-        deadline_ms: deadline_ms.unwrap_or(60_000),
-    });
-    let _ = std::fs::remove_dir_all(&fixture);
-    report
 }

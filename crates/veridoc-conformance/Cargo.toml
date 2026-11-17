@@ -10,6 +10,9 @@ rust-version.workspace = true
 # validated plugin is driven exactly as production drives it.
 veridoc-engine.workspace = true
 veridoc-protocol.workspace = true
+# The suite program is the mechanism's own contract: it reads the profile spec and the manifest
+# the mechanism wrote, and writes the verdicts file the mechanism reads back.
+plugin-rpc.workspace = true
 # Every plugin response is validated as an instance of the committed schema before deserialization.
 jsonschema = { version = "0.61.1", default-features = false }
 serde.workspace = true

@@ -80,6 +80,12 @@ enum Commands {
     ValidatePlugin {
         /// Installed plugin name or plugin checkout directory.
         plugin: Option<String>,
+        /// The suite-program mode of the pluginrpc mechanism (spec §12 item 6): read the
+        /// profile spec and the manifest `<dir>` holds, drive the plugin they name, and write
+        /// `<dir>/verdicts.json` instead of a report. The `prpc-core` runner writes `<dir>` and
+        /// appends this flag; it takes no plugin argument, because the manifest names one.
+        #[arg(long, value_name = "DIR", conflicts_with = "plugin")]
+        out: Option<PathBuf>,
     },
 }
 
@@ -109,7 +115,7 @@ fn main() -> ! {
             name,
         } => install_plugin::run(&git_url, reference.as_deref(), name.as_deref()),
         Commands::Plugins => plugins_cmd::run(),
-        Commands::ValidatePlugin { plugin } => validate_plugin::run(plugin.as_deref()),
+        Commands::ValidatePlugin { plugin, out } => validate_plugin::run(plugin.as_deref(), out),
     };
     match result {
         Ok(code) => exit(code),

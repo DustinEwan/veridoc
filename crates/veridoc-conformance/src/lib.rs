@@ -12,6 +12,12 @@
 //! probes — plus a `veridoc-conformance.json` naming them. A rule that does not apply to a
 //! project cannot silently pass: the manifest names every subject the suite needs, and a
 //! missing or unresolvable entry is a violation.
+//!
+//! The same [`run`] also answers the pluginrpc mechanism's suite-program contract: given the
+//! directory the mechanism wrote, [`suite::run`] reads the profile spec and the manifest from
+//! it, drives the plugin they name, and writes `verdicts.json` back (spec §12 item 6).
+
+pub mod suite;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Write};
@@ -25,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use veridoc_engine::hash;
 use veridoc_engine::plugin::{sentence, Launch, PluginClient};
+use veridoc_engine::plugins;
 use veridoc_protocol::{
     contract::*, Method, MethodName, Timeouts, METHOD_NOT_FOUND, PROTOCOL_VERSION,
 };
@@ -59,6 +66,16 @@ pub struct Violation {
     pub detail: String,
 }
 
+/// A rule the suite could not run, and the gate that stopped it (§12 item 3): a capability the
+/// plugin did not declare, or an earlier rule whose answer this one reads. It is a record and not
+/// a count, so a rule that never ran can never be read as a pass.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotApplicable {
+    pub rule: String,
+    pub reason: String,
+}
+
 /// What one suite run found. The report carries no policy: the CLI decides the exit code.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,12 +85,14 @@ pub struct Report {
     /// Claims the plugin's `collect` reported, so a suite that silently found nothing is visible.
     pub claims: usize,
     pub violations: Vec<Violation>,
-    /// Rules the suite could not evaluate because an upstream rule failed. They are counted,
-    /// never shown as passes.
-    pub not_applicable: usize,
+    /// Rules the suite could not run, each naming the gate that stopped it. They are kept apart
+    /// from the passes, and apart from the violations, which are the plugin's (§12).
+    pub not_applicable: Vec<NotApplicable>,
 }
 
 impl Report {
+    /// Every rule that could be run passed. A rule that could not run is neither a failure nor a
+    /// pass: it is in `not_applicable`, where the reader can see it (§12).
     pub fn passed(&self) -> bool {
         self.violations.is_empty()
     }
@@ -83,7 +102,15 @@ impl Report {
         RULES.iter().copied().filter(|r| seen.contains(r)).collect()
     }
 
-    /// An aligned FAIL table plus the summary line.
+    pub fn rules_skipped(&self) -> Vec<&str> {
+        RULES
+            .iter()
+            .copied()
+            .filter(|r| self.not_applicable.iter().any(|n| n.rule == *r))
+            .collect()
+    }
+
+    /// An aligned FAIL and SKIP table plus the summary line.
     pub fn render(&self) -> String {
         let mut out = String::new();
         for v in &self.violations {
@@ -93,12 +120,20 @@ impl Report {
                 v.detail.replace('\n', " ").trim()
             ));
         }
+        for n in &self.not_applicable {
+            out.push_str(&format!(
+                "SKIP  {:<22} {}\n",
+                n.rule,
+                n.reason.replace('\n', " ").trim()
+            ));
+        }
         let failed = self.rules_failed().len();
+        let skipped = self.rules_skipped().len();
         out.push_str(&format!(
             "{} rules passed, {} violated, {} not applicable (plugin {} {}, {} claims)\n",
-            RULES.len() - failed,
+            RULES.len() - failed - skipped,
             failed,
-            self.not_applicable,
+            skipped,
             self.plugin,
             self.protocol_version,
             self.claims
@@ -149,8 +184,9 @@ pub struct BivalenceExpect {
 
 fn read_manifest(project: &Path) -> Result<Manifest, String> {
     let path = project.join("veridoc-conformance.json");
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("the emitted project has no readable veridoc-conformance.json: {e}"))?;
+    let text = std::fs::read_to_string(&path).map_err(|e| {
+        format!("the emitted project has no readable veridoc-conformance.json: {e}")
+    })?;
     serde_json::from_str(&text).map_err(|e| format!("veridoc-conformance.json is invalid: {e}"))
 }
 
@@ -244,105 +280,290 @@ fn has_outcome_key(value: &Value) -> bool {
     }
 }
 
+/// `params` built from the published request type. The suite sends exactly the shape the profile
+/// spec names and the engine sends, so a params field no schema describes cannot slip in.
+fn params<T: Serialize>(request: &T) -> Option<Value> {
+    Some(serde_json::to_value(request).expect("the request types are serializable"))
+}
+
+/// The gate on one rule (§12 item 3): the capability whose method it calls, and the rules whose
+/// answer it reads, in the order [`RULES`] drives them. `vd-1.profile.json` states the same
+/// relation as `requiresCapability` and `dependsOn`, and `tests/profile_spec.rs` pins the two
+/// tables together.
+pub const GATES: &[(&str, Option<Capability>, &[&str])] = &[
+    ("handshake-schema", None, &[]),
+    ("collect-schema", Some(Capability::Collect), &[]),
+    (
+        "resolve-known",
+        Some(Capability::Resolution),
+        &["collect-schema"],
+    ),
+    (
+        "derivable-schema",
+        Some(Capability::Derivability),
+        &["collect-schema", "resolve-known"],
+    ),
+    (
+        "bivalence-negatives",
+        Some(Capability::Bivalence),
+        &["collect-schema", "resolve-known"],
+    ),
+    (
+        "run-returns-values",
+        Some(Capability::Execution),
+        &["collect-schema", "resolve-known"],
+    ),
+    (
+        "cite-schema",
+        Some(Capability::Citation),
+        &["collect-schema"],
+    ),
+    (
+        "surface-schema",
+        Some(Capability::Surface),
+        &["collect-schema"],
+    ),
+    ("unknown-method-frame", None, &[]),
+    ("framing-intact", None, &[]),
+];
+
+/// The rules this run has decided, and the gate that stopped each undecided one. Nothing records
+/// a pass, so the only way a rule reaches the report as a pass is by having been run (§12 item 3).
+struct Suite {
+    violations: Vec<Violation>,
+    not_applicable: Vec<NotApplicable>,
+}
+
+impl Suite {
+    /// Open a run. `declared` is the handshake's capability list, or `None` when the plugin never
+    /// answered: with no handshake there is nothing to gate on, and the run stopped for the reason
+    /// the caller has already recorded.
+    fn new(declared: Option<&[Capability]>) -> Suite {
+        let mut suite = Suite {
+            violations: Vec::new(),
+            not_applicable: Vec::new(),
+        };
+        let Some(declared) = declared else {
+            return suite;
+        };
+        for (rule, capability, _) in GATES {
+            let Some(capability) = capability else {
+                continue;
+            };
+            if !declared.contains(capability) {
+                suite.skip(
+                    rule,
+                    format!(
+                        "the plugin declared no `{}` capability, so its method was never called",
+                        capability.name()
+                    ),
+                );
+            }
+        }
+        suite
+    }
+
+    /// Whether this rule already has an outcome, which is how the caller knows to leave the
+    /// plugin alone: a gated rule is never called.
+    fn decided(&self, rule: &str) -> bool {
+        self.violations.iter().any(|v| v.rule == rule)
+            || self.not_applicable.iter().any(|n| n.rule == rule)
+    }
+
+    fn fail(&mut self, rule: &str, detail: impl Into<String>) {
+        self.violations.push(Violation {
+            rule: rule.to_string(),
+            detail: detail.into(),
+        });
+    }
+
+    /// Record that `rule` never ran, and stop every rule that reads its answer.
+    fn skip(&mut self, rule: &str, reason: impl Into<String>) {
+        if self.decided(rule) {
+            return;
+        }
+        let reason = reason.into();
+        self.not_applicable.push(NotApplicable {
+            rule: rule.to_string(),
+            reason: reason.clone(),
+        });
+        for (dependent, _, dependencies) in GATES {
+            if dependencies.contains(&rule) {
+                self.skip(dependent, format!("`{rule}` did not run: {reason}"));
+            }
+        }
+    }
+
+    /// Everything after `rule` in the order the suite drives them: the run ended there, so those
+    /// rules never ran.
+    fn skip_after(&mut self, rule: &str, reason: &str) {
+        for later in RULES.iter().skip_while(|r| **r != rule).skip(1) {
+            self.skip(later, reason);
+        }
+    }
+
+    fn finish(self, plugin: String, protocol_version: String, claims: usize) -> Report {
+        Report {
+            plugin,
+            protocol_version,
+            claims,
+            violations: self.violations,
+            not_applicable: self.not_applicable,
+        }
+    }
+}
+
 /// Run every rule against one plugin and report. `Err` is reserved for the suite's own
 /// preconditions — an unreadable fixture — because reporting them as a plugin violation
 /// would blame the plugin for a broken emitter.
 pub fn run(check: &Check) -> Result<Report, String> {
     let manifest = read_manifest(&check.project)?;
     let deadline = Duration::from_millis(check.deadline_ms);
-    let mut violations: Vec<Violation> = Vec::new();
-    let mut not_applicable = 0usize;
-    let mut claims = 0usize;
-    let mut plugin = String::from("(unknown)");
-    let mut protocol_version = String::from("(unknown)");
-    let mut fail = |rule: &str, detail: String, skipped: usize| {
-        violations.push(Violation {
-            rule: rule.to_string(),
-            detail,
-        });
-        not_applicable += skipped;
-    };
 
     // 1. handshake-schema.
     let (client, handshake) = match PluginClient::connect(&check.launch, STARTUP_TIMEOUT) {
         Ok(pair) => pair,
         Err(lost) => {
-            fail(
+            let mut suite = Suite::new(None);
+            suite.fail(
                 "handshake-schema",
                 format!("cannot start the plugin: {lost}"),
-                RULES.len() - 1,
             );
-            return Ok(report(
-                plugin,
-                protocol_version,
-                claims,
-                violations,
-                not_applicable,
-            ));
+            suite.skip_after(
+                "handshake-schema",
+                "the plugin never started, so no method was ever called",
+            );
+            return Ok(suite.finish(String::from("(unknown)"), String::from("(unknown)"), 0));
         }
     };
-    plugin = handshake.name.clone();
-    protocol_version = handshake.protocol_version.clone();
+    let plugin = handshake.name.clone();
+    let protocol_version = handshake.protocol_version.clone();
+    let mut suite = Suite::new(Some(handshake.capabilities.as_slice()));
     let hs_value = serde_json::to_value(&handshake).expect("Handshake is serializable");
     match schema("handshake.json") {
         Ok(v) => {
             if let Some(err) = schema_error(&v, &hs_value) {
-                fail("handshake-schema", err, 0);
+                suite.fail("handshake-schema", err);
             }
         }
-        Err(e) => fail("handshake-schema", e, 0),
+        Err(e) => suite.fail("handshake-schema", e),
     }
     if handshake.protocol_version != PROTOCOL_VERSION {
-        fail(
+        suite.fail(
             "handshake-schema",
             format!(
                 "handshake offered protocol \"{}\"; the suite speaks \"{PROTOCOL_VERSION}\"",
                 handshake.protocol_version
             ),
-            0,
         );
     }
 
-    // 2. collect-schema. Everything downstream reads the collect answer, so a failure here
-    // stops the suite rather than reporting nine symptoms of one cause.
+    let claims = scenario(&mut suite, check, &manifest, &client, deadline);
+
+    // 9./10. framing. These rules need raw lines, not the typed client: an unknown method must
+    // be answered with an error frame, and a malformed line must be dropped, not fatal. Each one
+    // starts its own plugin, so only a run that never started stops them.
+    if !suite.decided("unknown-method-frame") {
+        match raw_dialogue(
+            &check.launch,
+            &[json!({"jsonrpc":"2.0","id":9001,"method":"nope"}).to_string()],
+            9001,
+        ) {
+            Ok(frame) => {
+                match frame
+                    .get("error")
+                    .and_then(|e| e.get("code"))
+                    .and_then(Value::as_i64)
+                {
+                    Some(code) if code == METHOD_NOT_FOUND => {}
+                    Some(code) => suite.fail(
+                    "unknown-method-frame",
+                    format!(
+                        "unknown method answered with error code {code}, expected {METHOD_NOT_FOUND}"
+                    ),
+                ),
+                    None => suite.fail(
+                        "unknown-method-frame",
+                        format!("unknown method answered with a non-error frame: {frame}"),
+                    ),
+                }
+            }
+            Err(e) => suite.fail("unknown-method-frame", e),
+        }
+    }
+    if !suite.decided("framing-intact") {
+        match raw_dialogue(
+            &check.launch,
+            &[
+                "this line is not json".to_string(),
+                json!({"jsonrpc":"2.0","id":9002,"method":"handshake"}).to_string(),
+            ],
+            9002,
+        ) {
+            Ok(frame) if frame.get("result").is_some() => {}
+            Ok(frame) => suite.fail(
+                "framing-intact",
+                format!("the plugin did not answer after a malformed line: {frame}"),
+            ),
+            Err(e) => suite.fail("framing-intact", e),
+        }
+    }
+
+    client.kill();
+    Ok(suite.finish(plugin, protocol_version, claims))
+}
+
+/// Rules 2 to 8: the ones that read the `collect` answer. A failure that leaves the suite with
+/// nothing to read stops the section rather than reporting seven symptoms of one cause, and every
+/// rule it stopped is recorded as not applicable with that failure named (§12 item 3).
+fn scenario(
+    suite: &mut Suite,
+    check: &Check,
+    manifest: &Manifest,
+    client: &PluginClient,
+    deadline: Duration,
+) -> usize {
+    // 2. collect-schema. A plugin that declared no `collect` capability was gated before the
+    // first call and is never reached here.
+    if suite.decided("collect-schema") {
+        return 0;
+    }
     let collect: CollectResult = match schema("collect-result.json").and_then(|v| {
         call_ok(
-            &client,
+            client,
             Method::Collect,
-            Some(json!({ "root": check.project.display().to_string() })),
+            params(&CollectReq {
+                root: check.project.display().to_string(),
+            }),
             deadline,
             &v,
         )
     }) {
         Ok(result) => result,
         Err(e) => {
-            fail("collect-schema", e, RULES.len() - 2);
-            return Ok(report(
-                plugin,
-                protocol_version,
-                claims,
-                violations,
-                not_applicable,
-            ));
+            suite.fail("collect-schema", e);
+            suite.skip_after(
+                "collect-schema",
+                "collect answered nothing usable, and every rule after it reads its answer",
+            );
+            return 0;
         }
     };
-    claims = collect.claims.len();
+    let claims = collect.claims.len();
     if collect.claims.is_empty() {
-        fail(
+        suite.fail(
             "collect-schema",
-            "collect reported no claims from the emitted project".to_string(),
-            0,
+            "collect reported no claims from the emitted project",
         );
     }
     if !collect.skipped.is_empty() {
         let names: Vec<&str> = collect.skipped.iter().map(|s| s.file.as_str()).collect();
-        fail(
+        suite.fail(
             "collect-schema",
             format!(
                 "the emitted project must import cleanly; skipped sidecars: {}",
                 names.join(", ")
             ),
-            0,
         );
     }
 
@@ -359,34 +580,37 @@ pub fn run(check: &Check) -> Result<Report, String> {
     refs.push(BOGUS_REF.to_string());
     let resolve: ResolveResult = match schema("resolve-result.json").and_then(|v| {
         call_ok(
-            &client,
+            client,
             Method::Resolve,
-            Some(json!({ "refs": refs })),
+            params(&ResolveReq { refs }),
             deadline,
             &v,
         )
     }) {
         Ok(result) => result,
         Err(e) => {
-            fail("resolve-known", e, RULES.len() - 3);
-            return Ok(report(
-                plugin,
-                protocol_version,
-                claims,
-                violations,
-                not_applicable,
-            ));
+            suite.fail("resolve-known", e);
+            suite.skip_after(
+                "resolve-known",
+                "resolve answered nothing usable, and every rule after it reads its answer",
+            );
+            return claims;
         }
     };
     let referents: BTreeMap<String, (String, String)> = resolve
         .resolved
         .iter()
-        .map(|r| (r.reference.clone(), (r.referent_id.clone(), r.signature.clone())))
+        .map(|r| {
+            (
+                r.reference.clone(),
+                (r.referent_id.clone(), r.signature.clone()),
+            )
+        })
         .collect();
     let mut resolve_bad = Vec::new();
     for key in &keys {
         match referents.get(key) {
-            Some((id, signature)) if id.is_empty() => {
+            Some((id, _)) if id.is_empty() => {
                 resolve_bad.push(format!("resolved {key} carries an empty referentId"))
             }
             Some((_, signature)) if signature.is_empty() => {
@@ -423,216 +647,162 @@ pub fn run(check: &Check) -> Result<Report, String> {
         .iter()
         .any(|u| u.reference == BOGUS_REF && !u.reason.trim().is_empty())
     {
-        resolve_bad.push(format!("\"{BOGUS_REF}\" is not in unresolved with a reason"));
+        resolve_bad.push(format!(
+            "\"{BOGUS_REF}\" is not in unresolved with a reason"
+        ));
     }
     if !resolve_bad.is_empty() {
-        fail("resolve-known", resolve_bad.join("; "), 0);
+        suite.fail("resolve-known", resolve_bad.join("; "));
     }
 
     // 4. derivable-schema. The first symbol subject must yield visible facts; an empty list
     // means the plugin does not implement the gate.
-    let first_symbol = collect
-        .claims
-        .iter()
-        .find(|c| matches!(c.subject, RefToken::Symbol { .. }))
-        .map(|c| c.subject.key());
-    match first_symbol.and_then(|key| referents.get(&key).map(|(id, _)| id.clone())) {
-        Some(id) => {
-            let outcome: Result<DerivableResult, String> = schema("derivable-result.json").and_then(|v| {
-                call_ok(
-                    &client,
-                    Method::Derivable,
-                    Some(json!({ "referentId": id })),
-                    deadline,
-                    &v,
-                )
-            });
-            match outcome {
-                Ok(r) if r.facts.is_empty() => fail(
-                    "derivable-schema",
-                    "derivable returned no facts for a declared symbol".to_string(),
-                    0,
-                ),
-                Ok(_) => {}
-                Err(e) => fail("derivable-schema", e, 0),
+    if !suite.decided("derivable-schema") {
+        let first_symbol = collect
+            .claims
+            .iter()
+            .find(|c| matches!(c.subject, RefToken::Symbol { .. }))
+            .map(|c| c.subject.key());
+        match first_symbol.and_then(|key| referents.get(&key).map(|(id, _)| id.clone())) {
+            Some(id) => {
+                let outcome: Result<DerivableResult, String> = schema("derivable-result.json")
+                    .and_then(|v| {
+                        call_ok(
+                            client,
+                            Method::Derivable,
+                            params(&DerivableReq { referent_id: id }),
+                            deadline,
+                            &v,
+                        )
+                    });
+                match outcome {
+                    Ok(r) if r.facts.is_empty() => suite.fail(
+                        "derivable-schema",
+                        "derivable returned no facts for a declared symbol",
+                    ),
+                    Ok(_) => {}
+                    Err(e) => suite.fail("derivable-schema", e),
+                }
             }
+            None => suite.fail(
+                "derivable-schema",
+                "the emitted project has no symbol-subject claim with a resolved referent",
+            ),
         }
-        None => fail(
-            "derivable-schema",
-            "the emitted project has no symbol-subject claim with a resolved referent".to_string(),
-            0,
-        ),
     }
 
     // 5. bivalence-negatives. The spec negatives must come back bivalent=false and the
     // positives bivalent=true; the manifest names each probe by predicate.
-    let mut biv_bad = Vec::new();
-    for expect in &manifest.bivalence {
-        let outcome: Result<BivalenceResult, String> = match collect
-            .claims
-            .iter()
-            .find(|c| c.predicate == expect.predicate)
-            .map(|c| claim_id_for(&referents, c))
-        {
-            None => Err(format!(
-                "collect reported no claim with predicate \"{}\"",
-                expect.predicate
-            )),
-            Some(Err(e)) => Err(e),
-            Some(Ok(claim_id)) => schema("bivalence-result.json").and_then(|v| {
-                call_ok(
-                    &client,
-                    Method::Bivalence,
-                    Some(json!({ "claimId": claim_id })),
-                    deadline,
-                    &v,
-                )
-            }),
-        };
-        match outcome {
-            Ok(answer) => {
-                if answer.bivalent != expect.bivalent {
-                    biv_bad.push(format!(
-                        "\"{}\": answered bivalent={}, expected {}",
-                        expect.predicate, answer.bivalent, expect.bivalent
-                    ));
-                }
-                if let Some(want) = &expect.method {
-                    let got = method_name(answer.method);
-                    if &got != want {
+    if !suite.decided("bivalence-negatives") {
+        let mut biv_bad = Vec::new();
+        for expect in &manifest.bivalence {
+            let outcome: Result<BivalenceResult, String> = match collect
+                .claims
+                .iter()
+                .find(|c| c.predicate == expect.predicate)
+                .map(|c| claim_id_for(&referents, c))
+            {
+                None => Err(format!(
+                    "collect reported no claim with predicate \"{}\"",
+                    expect.predicate
+                )),
+                Some(Err(e)) => Err(e),
+                Some(Ok(claim_id)) => schema("bivalence-result.json").and_then(|v| {
+                    call_ok(
+                        client,
+                        Method::Bivalence,
+                        params(&BivalenceReq { claim_id }),
+                        deadline,
+                        &v,
+                    )
+                }),
+            };
+            match outcome {
+                Ok(answer) => {
+                    if answer.bivalent != expect.bivalent {
                         biv_bad.push(format!(
-                            "\"{}\": answered method \"{got}\", expected \"{want}\"",
-                            expect.predicate
+                            "\"{}\": answered bivalent={}, expected {}",
+                            expect.predicate, answer.bivalent, expect.bivalent
                         ));
                     }
+                    if let Some(want) = &expect.method {
+                        let got = method_name(answer.method);
+                        if &got != want {
+                            biv_bad.push(format!(
+                                "\"{}\": answered method \"{got}\", expected \"{want}\"",
+                                expect.predicate
+                            ));
+                        }
+                    }
                 }
+                Err(e) => biv_bad.push(format!("\"{}\": {e}", expect.predicate)),
             }
-            Err(e) => biv_bad.push(format!("\"{}\": {e}", expect.predicate)),
         }
-    }
-    if !biv_bad.is_empty() {
-        fail("bivalence-negatives", biv_bad.join("; "), 0);
+        if !biv_bad.is_empty() {
+            suite.fail("bivalence-negatives", biv_bad.join("; "));
+        }
     }
 
     // 6. run-returns-values. The engine evaluates the assertion tree, so the answer must be
     // values: ok, every declared observable, one answer per leaf, and no verdict field.
-    if let Err(detail) = run_scenario(&manifest, &client, deadline, &collect, &referents) {
-        fail("run-returns-values", detail, 0);
+    if !suite.decided("run-returns-values") {
+        if let Err(detail) = run_scenario(manifest, client, deadline, &collect, &referents) {
+            suite.fail("run-returns-values", detail);
+        }
     }
 
     // 7. cite-schema. The store is declared in the emitted project, so the citation must
     // resolve with text; an unresolved answer is the plugin failing, not a legitimate miss.
-    let cite_params = json!({ "citations": [ { "store": manifest.citation_store,
-        "id": manifest.citation_id, "turn": manifest.citation_turn } ] });
-    let cite: Result<CiteResult, String> = schema("cite-result.json").and_then(|v| {
-        call_ok(&client, Method::Cite, Some(cite_params), deadline, &v)
-    });
-    match cite {
-        Ok(result) => {
-            if result.resolved.is_empty() {
-                fail(
-                    "cite-schema",
-                    format!(
-                        "cite did not resolve {}/{} declared by the emitted project",
-                        manifest.citation_store, manifest.citation_id
-                    ),
-                    0,
-                );
-            } else if result.resolved.iter().any(|r| r.text.trim().is_empty()) {
-                fail(
-                    "cite-schema",
-                    "a resolved citation carried empty text".to_string(),
-                    0,
-                );
+    if !suite.decided("cite-schema") {
+        let citation = Citation {
+            store: manifest.citation_store.clone(),
+            id: manifest.citation_id.clone(),
+            turn: manifest.citation_turn,
+        };
+        let cite: Result<CiteResult, String> = schema("cite-result.json").and_then(|v| {
+            call_ok(
+                client,
+                Method::Cite,
+                params(&CiteReq {
+                    citations: vec![citation],
+                }),
+                deadline,
+                &v,
+            )
+        });
+        match cite {
+            Ok(result) => {
+                if result.resolved.is_empty() {
+                    suite.fail(
+                        "cite-schema",
+                        format!(
+                            "cite did not resolve {}/{} declared by the emitted project",
+                            manifest.citation_store, manifest.citation_id
+                        ),
+                    );
+                } else if result.resolved.iter().any(|r| r.text.trim().is_empty()) {
+                    suite.fail("cite-schema", "a resolved citation carried empty text");
+                }
             }
+            Err(e) => suite.fail("cite-schema", e),
         }
-        Err(e) => fail("cite-schema", e, 0),
     }
 
-    // 8. surface-schema.
-    match schema("surface-result.json").and_then(|v| -> Result<SurfaceResult, String> {
-        call_ok(&client, Method::Surface, Some(json!({})), deadline, &v)
-    }) {
-        Ok(result) if result.referents.is_empty() => fail(
-            "surface-schema",
-            "surface reported no referents for the emitted project".to_string(),
-            0,
-        ),
-        Ok(_) => {}
-        Err(e) => fail("surface-schema", e, 0),
-    }
-
-    // 9./10. framing. These rules need raw lines, not the typed client: an unknown method must
-    // be answered with an error frame, and a malformed line must be dropped, not fatal.
-    match raw_dialogue(
-        &check.launch,
-        &[json!({"jsonrpc":"2.0","id":9001,"method":"nope"}).to_string()],
-        9001,
-    ) {
-        Ok(frame) => {
-            match frame
-                .get("error")
-                .and_then(|e| e.get("code"))
-                .and_then(Value::as_i64)
-            {
-                Some(code) if code == METHOD_NOT_FOUND => {}
-                Some(code) => fail(
-                    "unknown-method-frame",
-                    format!(
-                        "unknown method answered with error code {code}, expected {METHOD_NOT_FOUND}"
-                    ),
-                    0,
-                ),
-                None => fail(
-                    "unknown-method-frame",
-                    format!("unknown method answered with a non-error frame: {frame}"),
-                    0,
-                ),
-            }
+    // 8. surface-schema. `surface` takes no params, so the request omits them rather than
+    // sending an empty object: a suite that sends a shape no host sends proves nothing.
+    if !suite.decided("surface-schema") {
+        match schema("surface-result.json").and_then(|v| -> Result<SurfaceResult, String> {
+            call_ok(client, Method::Surface, None, deadline, &v)
+        }) {
+            Ok(result) if result.referents.is_empty() => suite.fail(
+                "surface-schema",
+                "surface reported no referents for the emitted project",
+            ),
+            Ok(_) => {}
+            Err(e) => suite.fail("surface-schema", e),
         }
-        Err(e) => fail("unknown-method-frame", e, 0),
     }
-    match raw_dialogue(
-        &check.launch,
-        &[
-            "this line is not json".to_string(),
-            json!({"jsonrpc":"2.0","id":9002,"method":"handshake"}).to_string(),
-        ],
-        9002,
-    ) {
-        Ok(frame) if frame.get("result").is_some() => {}
-        Ok(frame) => fail(
-            "framing-intact",
-            format!("the plugin did not answer after a malformed line: {frame}"),
-            0,
-        ),
-        Err(e) => fail("framing-intact", e, 0),
-    }
-
-    client.kill();
-    Ok(report(
-        plugin,
-        protocol_version,
-        claims,
-        violations,
-        not_applicable,
-    ))
-}
-
-fn report(
-    plugin: String,
-    protocol_version: String,
-    claims: usize,
-    violations: Vec<Violation>,
-    not_applicable: usize,
-) -> Report {
-    Report {
-        plugin,
-        protocol_version,
-        claims,
-        violations,
-        not_applicable,
-    }
+    claims
 }
 
 fn method_name(method: BivalenceMethod) -> String {
@@ -645,7 +815,10 @@ fn method_name(method: BivalenceMethod) -> String {
 
 /// The engine's claim id for a collected claim: the same `hash::claim_id` the bind pass uses,
 /// so the plugin sees the id a real run would send.
-fn claim_id_for(referents: &BTreeMap<String, (String, String)>, claim: &RawClaim) -> Result<String, String> {
+fn claim_id_for(
+    referents: &BTreeMap<String, (String, String)>,
+    claim: &RawClaim,
+) -> Result<String, String> {
     let key = claim.subject.key();
     referents
         .get(&key)
@@ -697,17 +870,22 @@ fn run_scenario(
         deadline_ms: Timeouts::plugin_deadline(deadline),
         leaves,
     };
-    let params = serde_json::to_value(&request).expect("RunRequest is serializable");
-    let raw = sentence("run", client.request::<Value>(Method::Run, Some(params), deadline))?;
+    let raw = sentence(
+        "run",
+        client.request::<Value>(Method::Run, params(&request), deadline),
+    )?;
     let validator = schema("run-response.json")?;
     if let Some(err) = schema_error(&validator, &raw) {
         return Err(format!("answer is not schema-valid: {err}"));
     }
     if has_outcome_key(&raw) {
-        return Err("the answer carries an outcome field: run answers values, the engine judges".to_string());
+        return Err(
+            "the answer carries an outcome field: run answers values, the engine judges"
+                .to_string(),
+        );
     }
-    let answer: RunResponse =
-        serde_json::from_value(raw).map_err(|e| format!("schema-valid answer failed to decode: {e}"))?;
+    let answer: RunResponse = serde_json::from_value(raw)
+        .map_err(|e| format!("schema-valid answer failed to decode: {e}"))?;
     if !answer.ok {
         let detail = answer
             .failure
@@ -715,7 +893,11 @@ fn run_scenario(
             .unwrap_or_else(|| "no failure given".to_string());
         return Err(format!("the fixture scenario failed: {detail}"));
     }
-    let observed: BTreeSet<&str> = answer.observed.iter().map(|o| o.observable.as_str()).collect();
+    let observed: BTreeSet<&str> = answer
+        .observed
+        .iter()
+        .map(|o| o.observable.as_str())
+        .collect();
     let missing: Vec<&str> = manifest
         .observables
         .iter()
@@ -728,7 +910,11 @@ fn run_scenario(
             missing.join(", ")
         ));
     }
-    let answered: BTreeSet<&str> = answer.satisfied.iter().map(|s| s.leaf_id.as_str()).collect();
+    let answered: BTreeSet<&str> = answer
+        .satisfied
+        .iter()
+        .map(|s| s.leaf_id.as_str())
+        .collect();
     let unanswered: Vec<&str> = request
         .leaves
         .iter()
@@ -764,18 +950,12 @@ fn raw_dialogue(launch: &Launch, lines: &[String], want: u64) -> Result<Value, S
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("cannot spawn the plugin: {e}"))?;
-    let mut writer = child
-        .stdin
-        .take()
-        .ok_or("the plugin has no stdin")?;
+    let mut writer = child.stdin.take().ok_or("the plugin has no stdin")?;
     for line in lines {
         writeln!(writer, "{line}").map_err(|e| format!("cannot write to the plugin: {e}"))?;
     }
     writer.flush().map_err(|e| e.to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("the plugin has no stdout")?;
+    let stdout = child.stdout.take().ok_or("the plugin has no stdout")?;
     let (sender, receiver) = mpsc::channel::<String>();
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
@@ -808,4 +988,52 @@ fn raw_dialogue(launch: &Launch, lines: &[String], want: u64) -> Result<Value, S
         "the plugin never answered the probe request {want} within {} seconds",
         STARTUP_TIMEOUT.as_secs()
     ))
+}
+
+/// Render the conformance fixture with the plugin's emitter and drive the suite against the
+/// plugin as the registry would launch it. `veridoc install-plugin`, `veridoc validate-plugin`,
+/// and the suite program [`suite::run`] drive through here, so the three cannot drift.
+///
+/// `root` is the plugin checkout the manifest's argv was written against, and `emitter` that
+/// checkout's emitter, already resolved beside it. The fixture is staged outside both, because
+/// this removes the tree it stages.
+pub fn drive(
+    name: &str,
+    root: &Path,
+    argv: &[String],
+    emitter: &[PathBuf],
+    deadline_ms: Option<u64>,
+) -> Result<Report, String> {
+    let (program, args) = emitter
+        .split_first()
+        .ok_or(format!("plugin \"{name}\" declares an empty emitter argv"))?;
+    let fixture = plugins::root().join(format!(".conformance-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&fixture);
+    // The emitter prints the directory it rendered; that line is the plugin's protocol with
+    // its own driver, not veridoc's output, so it is captured and discarded.
+    let rendered = Command::new(program)
+        .args(args)
+        .args(["--out".to_string(), fixture.display().to_string()])
+        .current_dir(root)
+        .output()
+        .map_err(|e| format!("cannot run the conformance emitter: {e}"))?;
+    if !rendered.status.success() {
+        let _ = std::fs::remove_dir_all(&fixture);
+        return Err(format!(
+            "the conformance emitter of plugin \"{name}\" exited {}: {}",
+            rendered.status,
+            String::from_utf8_lossy(&rendered.stderr).trim()
+        ));
+    }
+    let mut launch = Launch::new(argv.to_vec());
+    // The plugin runs with the rendered fixture as its working directory, as a check runs it
+    // with the project it collects.
+    launch.cwd = Some(fixture.display().to_string());
+    let report = run(&Check {
+        launch,
+        project: fixture.clone(),
+        deadline_ms: deadline_ms.unwrap_or(60_000),
+    });
+    let _ = std::fs::remove_dir_all(&fixture);
+    report
 }
