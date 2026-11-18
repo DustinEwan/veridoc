@@ -46,6 +46,7 @@ pub const RULES: &[&str] = &[
     "run-returns-values",
     "cite-schema",
     "surface-schema",
+    "init-creates-the-project",
     "unknown-method-frame",
     "framing-intact",
 ];
@@ -219,6 +220,10 @@ const SCHEMAS: &[(&str, &str)] = &[
         include_str!("../../../docs/schema/veridoc-1/cite-result.json"),
     ),
     (
+        "init-result.json",
+        include_str!("../../../docs/schema/veridoc-1/init-result.json"),
+    ),
+    (
         "surface-result.json",
         include_str!("../../../docs/schema/veridoc-1/surface-result.json"),
     ),
@@ -322,6 +327,11 @@ pub const GATES: &[(&str, Option<Capability>, &[&str])] = &[
         "surface-schema",
         Some(Capability::Surface),
         &["collect-schema"],
+    ),
+    (
+        "init-creates-the-project",
+        Some(Capability::Initialization),
+        &[],
     ),
     ("unknown-method-frame", None, &[]),
     ("framing-intact", None, &[]),
@@ -802,7 +812,77 @@ fn scenario(
             Err(e) => suite.fail("surface-schema", e),
         }
     }
+    // 9. init-creates-the-project. `initialization` is the capability that lets the plugin write the
+    //    files the host cannot (`docs/decisions/0013`), so the suite asks for a scratch project and
+    //    checks the answer is true on disk.
+    if !suite.decided("init-creates-the-project") {
+        if let Err(e) = init_probe(client, deadline) {
+            suite.fail("init-creates-the-project", e);
+        }
+    }
     claims
+}
+
+/// Ask the plugin to initialise a scratch project and check three things: it reports the files it
+/// wrote, those files exist, and a second request over them is refused by naming one rather than
+/// replacing it silently. The scratch directory is outside the project under test, because a plugin
+/// that wrote its root document into the fixture would disturb every rule after this one.
+fn init_probe(client: &PluginClient, deadline: Duration) -> Result<(), String> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // One directory per probe: the harness runs several plugins in one process, and a probe that
+    // deleted another's scratch directory would report its own files as missing.
+    static PROBES: AtomicUsize = AtomicUsize::new(0);
+    let scratch = std::env::temp_dir().join(format!(
+        "veridoc-conformance-init-{}-{}",
+        std::process::id(),
+        PROBES.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&scratch)
+        .map_err(|e| format!("the suite could not create {}: {e}", scratch.display()))?;
+    let request = || -> Value {
+        serde_json::to_value(InitReq {
+            root: scratch.display().to_string(),
+            document: DocumentDecl {
+                path: "docs/conformance.spec.md".to_string(),
+                audience: "the conformance suite".to_string(),
+                question: "Which files does this plugin create?".to_string(),
+                not_applicable: None,
+            },
+            force: false,
+        })
+        .expect("an init request is serializable")
+    };
+    let outcome = (|| -> Result<(), String> {
+        let created = schema("init-result.json").and_then(|v| -> Result<InitResult, String> {
+            call_ok(client, Method::Init, Some(request()), deadline, &v)
+        })?;
+        let first = created
+            .written
+            .first()
+            .ok_or("init reported no file it wrote")?;
+        for path in &created.written {
+            if !scratch.join(path).is_file() {
+                return Err(format!("init reported {path}, which is not on disk"));
+            }
+        }
+        let again = schema("init-result.json").and_then(|v| -> Result<InitResult, String> {
+            call_ok(client, Method::Init, Some(request()), deadline, &v)
+        });
+        match again {
+            Ok(_) => Err(format!("init replaced {} without force", first)),
+            Err(reason) => {
+                if reason.contains(first.as_str()) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "the refusal does not name the file it refused: {reason}"
+                    ))
+                }
+            }
+        }
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    outcome
 }
 
 fn method_name(method: BivalenceMethod) -> String {

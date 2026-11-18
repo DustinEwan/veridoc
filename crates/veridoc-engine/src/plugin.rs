@@ -264,6 +264,13 @@ impl PluginClient {
         self.plugin.call(method, req, timeout)
     }
 
+    /// Ask the plugin to create the files only it can write. `docs/decisions/0013` puts the root
+    /// document with the plugin, so the host owns none of them, and a refusal naming an existing
+    /// file is the plugin's answer rather than the host's.
+    pub fn init(&self, req: &InitReq, timeout: Duration) -> Call<InitResult> {
+        self.call(Method::Init, req, timeout)
+    }
+
     pub fn collect(&self, root: &str, timeout: Duration) -> Call<CollectResult> {
         self.call(
             Method::Collect,

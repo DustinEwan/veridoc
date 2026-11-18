@@ -159,6 +159,7 @@ pub fn default_handshake() -> Value {
         "version": "0.1.0",
         "languages": ["typescript"],
         "capabilities": [
+            "initialization",
             "collect", "resolution", "derivability", "bivalence", "execution", "citation", "surface"
         ]
     })
@@ -267,16 +268,69 @@ pub fn default_surface() -> Value {
     })
 }
 
-fn default_result(method: Method, req: &Value) -> Value {
+/// What `init` creates: the root document this plugin's `collect` reads, and the prose file the
+/// requested document names. A file that already exists is a refusal unless `force` says otherwise,
+/// because a scaffold that overwrites an author's prose is worse than none.
+pub fn default_init(req: &Value) -> Result<Value, String> {
+    let root = req["root"]
+        .as_str()
+        .filter(|root| !root.is_empty())
+        .ok_or("init needs the project root")?;
+    let document = &req["document"];
+    let path = document["path"]
+        .as_str()
+        .filter(|path| !path.is_empty())
+        .ok_or("init needs the document's `.spec.md` path")?;
+    let audience = document["audience"].as_str().unwrap_or_default();
+    let question = document["question"].as_str().unwrap_or_default();
+    let force = req["force"].as_bool().unwrap_or(false);
+    let index = std::path::Path::new(root).join("index.doc.ts");
+    let prose = std::path::Path::new(root).join(path);
+    let index_body = format!(
+        "// The document tree, created by `veridoc init` through the plugin. Edit it; do not \
+         regenerate it.\nexport default tree({{\n  concepts: [\"project-scan\"],\n  documents: [{{ \
+         path: \"{path}\", audience: \"{audience}\", question: \"{question}\" }}],\n}});\n"
+    );
+    let prose_body = format!(
+        "<doc-section name=\"cli\">\n\n## {question}\n\nWrite the prose here, and name a claim where \
+         a sentence states one: <doc-claim name=\"predicate\"/>.\n"
+    );
+    let mut written = Vec::new();
+    for (file, body) in [(index, index_body), (prose, prose_body)] {
+        if file.exists() && !force {
+            return Err(format!(
+                "{} exists; pass force to replace it",
+                file.display()
+            ));
+        }
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&file, body).map_err(|e| e.to_string())?;
+        written.push(
+            file.strip_prefix(root)
+                .unwrap_or(file.as_path())
+                .display()
+                .to_string(),
+        );
+    }
+    Ok(json!({
+        "written": written,
+        "next": ["declare the claims for src/cli.ts in src/cli.doc.ts", "run `veridoc check`"]
+    }))
+}
+
+fn default_result(method: Method, req: &Value) -> Result<Value, String> {
     match method {
-        Method::Handshake => default_handshake(),
-        Method::Collect => default_collect(req),
-        Method::Resolve => default_resolve(req),
-        Method::Derivable => default_derivable(),
-        Method::Bivalence => default_bivalence(req),
-        Method::Run => default_run(req),
-        Method::Cite => default_cite(req),
-        Method::Surface => default_surface(),
+        Method::Handshake => Ok(default_handshake()),
+        Method::Init => default_init(req),
+        Method::Collect => Ok(default_collect(req)),
+        Method::Resolve => Ok(default_resolve(req)),
+        Method::Derivable => Ok(default_derivable()),
+        Method::Bivalence => Ok(default_bivalence(req)),
+        Method::Run => Ok(default_run(req)),
+        Method::Cite => Ok(default_cite(req)),
+        Method::Surface => Ok(default_surface()),
     }
 }
 
@@ -330,9 +384,16 @@ pub fn serve(reader: impl BufRead, writer: &mut impl Write) {
         }
         let params = req.params.clone().unwrap_or(Value::Null);
         let result = match script.get(method.name()) {
-            Some(override_result) if !override_result.is_null() => override_result.clone(),
+            Some(override_result) if !override_result.is_null() => Ok(override_result.clone()),
             _ => default_result(method, &params),
         };
-        let _ = write_line(writer, &Response::result(req.id, result));
+        match result {
+            Ok(value) => {
+                let _ = write_line(writer, &Response::result(req.id, value));
+            }
+            Err(reason) => {
+                let _ = write_line(writer, &Response::refusal(req.id, PLUGIN_ERROR, reason));
+            }
+        }
     }
 }

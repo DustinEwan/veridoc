@@ -1,10 +1,9 @@
-//! The stage boundary `docs/spec.md:501` makes mechanically checkable: no engine source
-//! file knows a programming language. The only `.ts` spellings allowed are the two file
-//! names the engine treats as opaque labels — the index it never parses and the extension
-//! it names in one error message — and no engine file mentions a TypeScript tool.
+//! The stage boundary the specification's artifact stages make mechanically checkable: no
+//! engine source file knows a programming language. The engine reads claims, referents, the
+//! document tree, and the observable declarations out of the plugin's answers, so it has no
+//! reason to name a file an author writes, and no reason to know a language's tooling.
 
 use std::path::{Path, PathBuf};
-const ALLOWED_TS_LABELS: &[&str] = &["index.doc.ts", ".obs.ts"];
 
 fn engine_sources() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -40,14 +39,12 @@ fn no_engine_source_mentions_a_typescript_tool() {
 }
 
 #[test]
-fn the_only_ts_spellings_are_opaque_file_labels() {
+fn no_engine_source_names_an_authored_file_extension() {
     for file in engine_sources() {
         let text = std::fs::read_to_string(&file).expect("source is readable");
-        let mut rest = text.replace(ALLOWED_TS_LABELS[0], "");
-        rest = rest.replace(ALLOWED_TS_LABELS[1], "");
         assert!(
-            !rest.contains(".ts"),
-            "{} mentions `.ts` outside the allowed labels",
+            !text.contains(".ts"),
+            "{} names a `.ts` file, which the engine never parses",
             file.display()
         );
     }

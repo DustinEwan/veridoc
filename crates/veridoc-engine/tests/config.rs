@@ -27,7 +27,7 @@ fn write_config(root: &Path, json: &str) -> PathBuf {
 
 const MINIMAL: &str = r#"{
   "plugin": { "command": ["true"] },
-  "judge": { "command": ["true"], "model": "scripted-1" }
+  "judge": { "provider": "openai", "model": "m" }
 }"#;
 
 #[test]
@@ -41,9 +41,14 @@ fn defaults_apply_to_every_omitted_key() {
     assert_eq!(loaded.config.plugin.collect_timeout_ms, 120_000);
     assert_eq!(loaded.config.coverage.required, 0.0);
     assert_eq!(loaded.config.run.scenario_deadline_ms, 30_000);
-    assert_eq!(loaded.config.judge.transport, "command");
-    assert_eq!(loaded.config.judge.prompt_version, "veridoc-prompt-1");
-    assert_eq!(loaded.config.judge.timeout_ms, 120_000);
+    let judge = loaded
+        .config
+        .judge
+        .as_ref()
+        .expect("a judge declared in the config is present after load");
+    assert_eq!(judge.provider, "openai");
+    assert_eq!(judge.prompt_version, "veridoc-prompt-1");
+    assert_eq!(judge.timeout_ms, 900_000);
     assert_eq!(loaded.config.output.dir, ".veridoc/out");
     assert_eq!(
         loaded.config.formatters().unwrap(),
@@ -70,56 +75,62 @@ fn each_rejection_carries_its_exact_message() {
     let cases: Vec<(&str, &str)> = vec![
         (
             r#"{ "protocol": "veridoc/2", "plugin": { "command": ["true"] },
-                "judge": { "command": ["true"], "model": "m" } }"#,
+                "judge": { "provider": "openai", "model": "m" } }"#,
             "protocol \"veridoc/2\" is not supported; this build speaks \"veridoc/1\"",
         ),
         (
-            r#"{ "judge": { "command": ["true"], "model": "m" } }"#,
+            r#"{ "judge": { "provider": "openai", "model": "m" } }"#,
             "plugin.command is required, or plugin.name must name an installed plugin",
         ),
         (
             r#"{ "plugin": { "name": "not-installed-xyz" },
-                "judge": { "command": ["true"], "model": "m" } }"#,
+                "judge": { "provider": "openai", "model": "m" } }"#,
             "`command` is required for plugin \"not-installed-xyz\". Install it with `veridoc install-plugin <git-url>`, or set `plugin.command`.",
         ),
         (
             r#"{ "plugin": { "command": ["true"] }, "coverage": { "required": 1.5 },
-                "judge": { "command": ["true"], "model": "m" } }"#,
+                "judge": { "provider": "openai", "model": "m" } }"#,
             "coverage.required must be between 0.0 and 1.0",
         ),
         (
             r#"{ "plugin": { "command": ["true"] }, "run": { "scenarioDeadlineMs": 0 },
-                "judge": { "command": ["true"], "model": "m" } }"#,
+                "judge": { "provider": "openai", "model": "m" } }"#,
             "run.scenarioDeadlineMs must be greater than zero",
         ),
         (
             r#"{ "plugin": { "command": ["true"] },
-                "judge": { "transport": "openai", "model": "m" } }"#,
-            "judge.transport must be \"command\" or \"anthropic\"",
+                "judge": { "provider": "openai-like", "model": "m" } }"#,
+            "judge.provider openai-like is not one of openai, anthropic, gemini, ollama, groq, xai, deepseek, openrouter, mistral",
         ),
         (
-            r#"{ "plugin": { "command": ["true"] }, "judge": { "model": "m" } }"#,
-            "judge.command is required when judge.transport is \"command\"",
-        ),
-        (
-            r#"{ "plugin": { "command": ["true"] }, "judge": { "command": ["true"] } }"#,
+            r#"{ "plugin": { "command": ["true"] }, "judge": { "provider": "openai" } }"#,
             "judge.model is required",
         ),
         (
             r#"{ "plugin": { "command": ["true"] },
-                "judge": { "command": ["true"], "model": "m" },
+                "judge": { "provider": "openai", "model": "m", "timeoutMs": 0 } }"#,
+            "judge.timeoutMs must be greater than zero",
+        ),
+        (
+            r#"{ "plugin": { "command": ["true"] },
+                "judge": { "provider": "openai", "model": "m", "maxTokens": 0 } }"#,
+            "judge.maxTokens must be greater than zero",
+        ),
+        (
+            r#"{ "plugin": { "command": ["true"] },
+                "judge": { "provider": "openai", "model": "m" },
                 "output": { "formatters": ["html"] } }"#,
             "output.formatters names \"html\"; the built-in formatters are \"markdown\" and \"json\"",
         ),
         (
             r#"{ "plugin": { "command": ["true"] },
-                "judge": { "command": ["true"], "model": "m" },
+                "judge": { "provider": "openai", "model": "m" },
                 "output": { "formatters": [{ "name": "html" }] } }"#,
             "output.formatters entry must be a string or an object with name and command",
         ),
         (
             r#"{ "plugin": { "command": ["true"] },
-                "judge": { "command": ["true"], "model": "m" },
+                "judge": { "provider": "openai", "model": "m" },
                 "citationStores": [ { "name": "s", "kind": "file" },
                                     { "name": "s", "kind": "git" } ] }"#,
             "citation store \"s\" is declared twice",
@@ -131,6 +142,25 @@ fn each_rejection_carries_its_exact_message() {
         let got = config::load(&path).unwrap_err().to_string();
         assert_eq!(&got, want, "case {index}");
     }
+}
+
+#[test]
+fn a_judge_without_a_provider_is_rejected_naming_the_field() {
+    let root = tmp_dir("judge-bare");
+    let path = write_config(
+        &root,
+        r#"{ "plugin": { "command": ["true"] }, "judge": { "model": "m" } }"#,
+    );
+    let err = config::load(&path).unwrap_err().to_string();
+    assert!(err.contains("provider"), "unexpected message: {err}");
+}
+
+#[test]
+fn a_config_without_a_judge_validates_and_leaves_the_semantic_stage_off() {
+    let root = tmp_dir("no-judge");
+    let path = write_config(&root, r#"{ "plugin": { "command": ["true"] } }"#);
+    let loaded = config::load(&path).expect("a config with no judge loads");
+    assert!(loaded.config.judge.is_none());
 }
 
 #[test]
@@ -170,7 +200,7 @@ fn launch_resolves_file_arguments_against_the_project_and_injects_the_environmen
     let path = write_config(
         &root,
         r#"{ "plugin": { "command": ["node", "server.js"] },
-            "judge": { "command": ["true"], "model": "m" } }"#,
+            "judge": { "provider": "openai", "model": "m" } }"#,
     );
     let loaded = config::load(&path).unwrap();
     let launch = loaded.launch().unwrap();

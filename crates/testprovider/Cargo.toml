@@ -1,0 +1,9 @@
+[package]
+name = "veridoc-testprovider"
+description = "A mock OpenAI-compatible chat endpoint, so a test can be the judge's provider."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde_json.workspace = true

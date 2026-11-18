@@ -18,7 +18,8 @@ use crate::diagnostic::Diagnostic;
 use crate::execute::{self, Outcome, READING_CODE_WRONG, READING_SCENARIO_WRONG};
 use crate::format;
 use crate::hash;
-use crate::judge::{AnthropicJudge, CommandJudge, Judge, JudgeError};
+use crate::inputs;
+use crate::judge::{Judge, JudgeError, ModelJudge, Provider};
 use crate::plugin::PluginClient;
 use crate::result::{self, ClaimResult, Metrics, Outcome as DocOutcome, ResultDocument};
 use crate::verdicts;
@@ -264,11 +265,22 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
         Ok(judge_client) => judge_client,
         Err(detail) => return Report::run_failure(format!("run failed: judge: {detail}")),
     };
+    if judge_client.is_none() {
+        // The absence is the author's configuration, so it is not a failure; it is also not
+        // a pass, so it is said out loud and carried into the result document.
+        eprintln!("semantic stage not run: no judge is configured in .veridoc/config.json");
+        warnings.push(crate::result::Warning {
+            file: None,
+            line: None,
+            message: "semantic stage not run: no judge is configured, so prose is unchecked"
+                .to_string(),
+        });
+    }
     let cited = match cite::cite_all(
         &claims,
         |citations| client.cite(citations),
         |claim, text| {
-            judge_citation(judge_client.as_ref(), root, config, claim, text).unwrap_or_else(
+            judge_citation(judge_client.as_deref(), root, config, claim, text).unwrap_or_else(
                 |detail| {
                     RUN_FAILURE.with(|slot| {
                         *slot.borrow_mut() = Some(detail.clone());
@@ -326,7 +338,7 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
         match judge_task(
             Task::S1,
             &JudgeRun {
-                judge: judge_client.as_ref(),
+                judge: judge_client.as_deref(),
                 root,
                 config,
                 brief: &brief,
@@ -335,7 +347,7 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
             },
             |j, b| j.s1(b),
         ) {
-            Ok(verdict) => {
+            Ok(Some(verdict)) => {
                 for unstated in &verdict.unstated_assertions {
                     warnings.push(crate::result::Warning {
                         file: Some(section.file.clone()),
@@ -347,13 +359,14 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
                     });
                 }
             }
+            Ok(None) => {}
             Err(detail) => return Report::run_failure(format!("run failed: judge: {detail}")),
         }
         let brief = section_brief(Task::S2, &bound, section, &named, &outcomes);
         match judge_task(
             Task::S2,
             &JudgeRun {
-                judge: judge_client.as_ref(),
+                judge: judge_client.as_deref(),
                 root,
                 config,
                 brief: &brief,
@@ -362,7 +375,7 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
             },
             |j, b| j.s2(b),
         ) {
-            Ok(verdict) => {
+            Ok(Some(verdict)) => {
                 judged_sections.extend(section.claims.iter().cloned());
                 for pair in &verdict.pairs {
                     errors.push(Diagnostic::error(
@@ -375,6 +388,7 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
                     ));
                 }
             }
+            Ok(None) => {}
             Err(detail) => return Report::run_failure(format!("run failed: judge: {detail}")),
         }
     }
@@ -386,7 +400,15 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
             errors.push(Diagnostic::error(
                 &claim.file,
                 claim.line,
-                format!("claim {} is on the judge channel with no verdict", claim.id),
+                format!(
+                    "claim {} is on the judge channel with no verdict: {}",
+                    claim.id,
+                    if judge_client.is_some() {
+                        "no section names it"
+                    } else {
+                        "no judge is configured"
+                    }
+                ),
             ));
         }
     }
@@ -400,16 +422,16 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
     match judge_task(
         Task::S3,
         &JudgeRun {
-            judge: judge_client.as_ref(),
+            judge: judge_client.as_deref(),
             root,
             config,
             brief: &index_brief,
-            section_path: "index.doc.ts".to_string(),
+            section_path: "document tree".to_string(),
             ids: index_ids,
         },
         |j, b| j.s3(b),
     ) {
-        Ok(verdict) => {
+        Ok(Some(verdict)) => {
             for pair in &verdict.pairs {
                 warnings.push(crate::result::Warning {
                     file: None,
@@ -421,6 +443,7 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
                 });
             }
         }
+        Ok(None) => {}
         Err(detail) => return Report::run_failure(format!("run failed: judge: {detail}")),
     }
 
@@ -524,6 +547,13 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
         Ok(_) => true,
         Err(e) => return Report::run_failure(format!("run failed: plugin: {e}")),
     };
+
+    // 16. The input fingerprint `veridoc stat` compares a later checkout against. Failing to
+    //     write it is a run failure: a run that records what it read is the only run a job that
+    //     cannot call a model can trust later.
+    if let Err(e) = inputs::collect(root).and_then(|files| inputs::write(root, &files)) {
+        return Report::run_failure(format!("run failed: inputs: {e}"));
+    }
     if skipped {
         eprintln!("documentation up to date; formatters skipped");
         return Report {
@@ -585,27 +615,33 @@ fn citation_ref_of(claim: &BoundClaim) -> String {
     }
 }
 
-fn make_judge(loaded: &LoadedConfig) -> Result<Box<dyn Judge>, String> {
-    let config = &loaded.config;
-    Ok(match config.judge.transport.as_str() {
-        "anthropic" => Box::new(AnthropicJudge {
-            model: config.judge.model.clone().unwrap_or_default(),
-            prompt_version: config.judge.prompt_version.clone(),
-            timeout: Duration::from_millis(config.judge.timeout_ms),
-        }),
-        _ => {
-            // The judge command resolves against the project root like the plugin command.
-            let launch = loaded.judge_launch().map_err(|e| e.to_string())?;
-            Box::new(CommandJudge {
-                command: launch.argv,
-                cwd: launch.cwd,
-                env: launch.env.into_iter().collect(),
-                model: config.judge.model.clone(),
-                prompt_version: config.judge.prompt_version.clone(),
-                timeout: Duration::from_millis(config.judge.timeout_ms),
-            })
-        }
-    })
+/// The judge the project's config names. `None` is a project that runs only the
+/// deterministic checks; a provider name this build does not speak is an error, because a
+/// judge silently dropped by a typo would read as a clean run.
+fn make_judge(loaded: &LoadedConfig) -> Result<Option<Box<dyn Judge>>, String> {
+    let Some(judge) = &loaded.config.judge else {
+        return Ok(None);
+    };
+    let provider = Provider::parse(&judge.provider)?;
+    let key_env = judge
+        .api_key_env
+        .clone()
+        .or_else(|| provider.default_key_env().map(str::to_string));
+    let base = judge
+        .base_url
+        .clone()
+        .unwrap_or_else(|| provider.default_base_url().to_string());
+    Ok(Some(Box::new(ModelJudge {
+        provider,
+        model: judge.model.clone(),
+        base_url: base.trim_end_matches('/').to_string(),
+        api_key: key_env
+            .as_deref()
+            .and_then(|variable| std::env::var(variable).ok()),
+        max_tokens: judge.max_tokens,
+        additional_params: judge.additional_params.clone().unwrap_or(Value::Null),
+        timeout: Duration::from_millis(judge.timeout_ms),
+    })))
 }
 
 // A judge transport failure raised inside the citation `judge` callback, which must return
@@ -621,7 +657,7 @@ thread_local! {
 }
 
 fn judge_citation(
-    judge: &dyn Judge,
+    judge: Option<&dyn Judge>,
     root: &Path,
     config: &Config,
     claim: &BoundClaim,
@@ -646,7 +682,7 @@ fn judge_citation(
         nodes: vec![],
     };
     let ids = judge_ids_for(&[claim], &format!("{}\u{0}{cited_text}", claim.text));
-    let verdict: veridoc_protocol::S2Verdict = judge_task(
+    let verdict = match judge_task(
         Task::S2,
         &JudgeRun {
             judge,
@@ -657,7 +693,17 @@ fn judge_citation(
             ids,
         },
         |j, b| j.s2(b),
-    )?;
+    )? {
+        Some(verdict) => verdict,
+        None => {
+            return Err(format!(
+                "claim {} cites {}, which no deterministic check can settle, and no judge is \
+                 configured to judge it",
+                claim.id,
+                citation_ref_of(claim)
+            ))
+        }
+    };
     Ok(if verdict.pairs.is_empty() {
         Outcome::Supported
     } else {
@@ -705,7 +751,7 @@ fn kind_text(kind: Kind) -> &'static str {
 
 /// Everything one judged task needs: the transport, the cache inputs, and the brief.
 struct JudgeRun<'a> {
-    judge: &'a dyn Judge,
+    judge: Option<&'a dyn Judge>,
     root: &'a Path,
     config: &'a Config,
     brief: &'a Brief,
@@ -719,28 +765,26 @@ fn judge_task<T>(
     task: Task,
     run: &JudgeRun<'_>,
     call: impl FnOnce(&dyn Judge, &Brief) -> Result<T, JudgeError>,
-) -> Result<T, String>
+) -> Result<Option<T>, String>
 where
     T: serde::Serialize + DeserializeOwned,
 {
-    let model = run
-        .config
-        .judge
-        .model
-        .clone()
-        .unwrap_or_else(|| run.config.judge.transport.clone());
+    let (Some(judge), Some(settings)) = (run.judge, run.config.judge.as_ref()) else {
+        return Ok(None);
+    };
     let key = verdicts::key(
         task.name(),
         &run.ids.0,
         &run.ids.1,
         &run.ids.2,
-        &model,
-        &run.config.judge.prompt_version,
+        &settings.model,
+        &settings.prompt_version,
     );
     let issued = run.brief.issued_ids();
     if let Some(cached) = verdicts::load(run.root, &key) {
         verdicts::verify_ids(task, &cached.verdict, &issued)?;
         return serde_json::from_value(cached.verdict)
+            .map(Some)
             .map_err(|e| format!("judge verdict malformed: {e}"));
     }
     // One line per section per run: S1 and S2 of the same section share the section,
@@ -748,11 +792,11 @@ where
     if REJUDGED.with(|set| set.borrow_mut().insert(run.section_path.clone())) {
         eprintln!("re-judged {}", run.section_path);
     }
-    let verdict = call(run.judge, run.brief).map_err(|e| e.to_string())?;
+    let verdict = call(judge, run.brief).map_err(|e| e.to_string())?;
     let value = serde_json::to_value(&verdict).expect("a verdict is serializable");
     verdicts::verify_ids(task, &value, &issued)?;
     let _ = verdicts::store(run.root, &key, &value, &run.brief.render());
-    Ok(verdict)
+    Ok(Some(verdict))
 }
 
 fn brief_claim(claim: &BoundClaim, channel: &str) -> BriefClaim {
@@ -826,7 +870,7 @@ fn outcome_word(outcome: DocOutcome) -> &'static str {
 fn index_brief(bound: &Bound) -> Brief {
     Brief {
         task: Task::S3,
-        section: "index.doc.ts".into(),
+        section: "document tree".into(),
         audience: None,
         question: None,
         spans: vec![],

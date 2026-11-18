@@ -121,7 +121,7 @@ pub enum BindError {
         obs: String,
         action: String,
     },
-    #[error("observable {obs} is not declared in any .obs.ts")]
+    #[error("observable {obs} is not declared by the plugin")]
     UndeclaredObservable {
         file: String,
         line: u32,
@@ -242,7 +242,7 @@ pub enum BindError {
         line: u32,
         collection: String,
     },
-    #[error("no document node in index.doc.ts declares this file")]
+    #[error("no document node in the project's document tree declares this file")]
     UndeclaredSpec { file: String, line: u32 },
     #[error("declared node is neither satisfied nor notApplicable with a reason")]
     UnsatisfiedNode { file: String, line: u32 },

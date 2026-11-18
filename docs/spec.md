@@ -17,6 +17,7 @@ yet. Where a rule exists to stop a specific failure, the failure sits next to it
 - [Evidence and outcomes](#evidence-and-outcomes)
 - [Provenance citations](#provenance-citations)
 - [Judge tasks](#judge-tasks)
+- [The record and the gate](#the-record-and-the-gate)
 - [Two artifact stages](#two-artifact-stages)
 - [Engine and plugin boundary](#engine-and-plugin-boundary)
 - [The report](#the-report)
@@ -96,12 +97,17 @@ project/
     verdicts/*.json               the semantic cache, each entry holding the brief that produced the verdict
     result.json                   the result document every formatter consumes
     last-result-hash              the hash that lets an unchanged run skip the formatters
+    inputs.json                   every file the recorded run read, with its content hash: what `veridoc stat` checks a checkout against
     out/<formatter>/              where the formatters write
 ```
 
 `<ext>` is the extension of the project's own source language. The host names no language and no extension: it
 asks a plugin to collect, and the plugin decides which files of its own language carry the index, the claims, and
 the vocabulary. A layout rule that names `.ts` is a rule a project in any other language cannot satisfy.
+
+The file that holds the document tree belongs to the plugin, not the host. `veridoc init` writes the
+configuration and the ignore entry and no document file, because a host that writes a file it cannot
+parse hands the author a file that cannot be built (`docs/decisions/0013`).
 
 A claim lives in the sidecar beside the file that holds its subject, which keeps documentation out of the
 code and keeps review local. A concept is a field on the claim rather than a directory, so the same
@@ -454,8 +460,17 @@ Three bounded tasks use a model in v1. The first two compare prose against claim
 `supported`, and the third compares the document tree against itself. The judge tests nothing, reads no
 code, and proposes no change to code or to prose. It returns a verdict and the spans that justify it.
 
+The engine calls the model itself. A project names a provider, a model, and — for a server that
+serves the OpenAI wire on its own host — an endpoint, and the credential comes from the
+environment. A project ships no judge program: a judge is the model, and a process in front of it
+would decide what the model said (`docs/decisions/0012`).
+
 Whether a claim holds is settled by the deterministic stage where a channel exists, and the outcome travels
 with it into the brief, so the judge reads the result rather than guessing at it.
+
+A project may leave `judge` out, and then the semantic stage does not run. The report says so
+rather than reporting a residue of zero, and a claim whose only channel is the judge, or the support
+of a citation, is an error: a check that did not run is never a pass.
 
 | Task | Input | Output |
 | --- | --- | --- |
@@ -527,6 +542,28 @@ spans re-verify blocks, because publishing a sentence the claims deny is the fai
 prevent. A judge transport error, a timeout, an unusable verdict, or a verdict whose spans cannot be located
 is a run failure: a check that did not run makes the build red rather than green.
 
+## The record and the gate
+
+A judged run records what it read. Alongside the result document, `check` writes
+`.veridoc/inputs.json`: every file the project's commit would carry, tracked or newly added and not
+ignored, each with the sha256 of its content. `veridoc stat` compares a checkout against that record
+and starts nothing — no plugin, no scenario harness build, no model call. It reports through the exit
+code, because the reader is a job that looks at nothing else: 0 the record covers this checkout, 1 it
+does not, 3 there is no record. It is the gate a job runs when it has no model to ask
+(`docs/decisions/0014`).
+
+The gate answers one question, and answers it exactly: are these the files the last judged run
+read. A record made against different files is stale, and the repair is a local `veridoc check`,
+where the verdict cache replays every section that did not change. The repair costs a replay, not a
+fresh judgement of the document.
+
+Two limits follow from the question being narrow, and both are deliberate. The record does not
+prove the deterministic stage passed at that commit, because re-deriving an outcome means running
+the scenario. And the fingerprint covers the whole project rather than the slice one verdict key
+covers, so an unrelated commit makes the record stale and a `veridoc check` restores it; the
+alternative, fingerprinting only what one key covers, would let a change to a file no key names
+pass unrecorded.
+
 ## Two artifact stages
 
 Two analyses run over the same claims, and they need opposite representations. A program reads a structure
@@ -569,7 +606,19 @@ export interface VeridocPlugin {
     name: string;
     version: string;
     languages: string[];
-    capabilities: Capability[];          // "collect" | "resolution" | "derivability" | "bivalence" | "execution" | "citation" | "surface"
+    capabilities: Capability[];          // "initialization" | "collect" | "resolution" | "derivability" | "bivalence" | "execution" | "citation" | "surface"
+  }>;
+
+  /** Create what only the plugin can create: the root document, and whatever its language needs beside
+      it. The host writes no project file, because a host that writes a file it cannot parse hands the
+      author a file that cannot be built (`docs/decisions/0013`). */
+  init(req: {
+    root: string;
+    document: { path: string; audience: string; question: string; notApplicable?: string };
+    force?: boolean;
+  }): Promise<{
+    written: string[];
+    next: string[];
   }>;
 
   /** Read the index, every claim sidecar, and every vocabulary sidecar, and report what was declared. */
@@ -619,6 +668,7 @@ export interface VeridocPlugin {
 
 | Capability | What the engine does without it |
 | --- | --- |
+| `initialization` | `veridoc init` cannot scaffold the project: it writes the configuration and then names the files the author must create with the plugin's own tooling. `check` is unaffected. |
 | `collect` | Nothing works. Without the claim set there is no build. |
 | `resolution` | Nothing works. A plugin without it cannot be used. |
 | `derivability` | The derivability ban is inert and is reported as inert. |

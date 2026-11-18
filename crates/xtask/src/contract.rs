@@ -12,6 +12,7 @@ use veridoc_protocol::{Capability, Method, MethodName, PROTOCOL_VERSION};
 fn protocol_methods() -> Vec<&'static str> {
     [
         Method::Handshake,
+        Method::Init,
         Method::Collect,
         Method::Resolve,
         Method::Derivable,
@@ -27,6 +28,7 @@ fn protocol_methods() -> Vec<&'static str> {
 
 fn protocol_capabilities() -> Vec<String> {
     [
+        Capability::Initialization,
         Capability::Collect,
         Capability::Resolution,
         Capability::Derivability,

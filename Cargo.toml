@@ -5,6 +5,7 @@ members = [
     "crates/veridoc-engine",
     "crates/veridoc-cli",
     "crates/veridoc-conformance",
+    "crates/testprovider",
     "crates/xtask",
 ]
 
@@ -17,6 +18,7 @@ rust-version = "1.88"
 veridoc-protocol = { path = "crates/veridoc-protocol" }
 veridoc-engine = { path = "crates/veridoc-engine" }
 veridoc-conformance = { path = "crates/veridoc-conformance" }
+veridoc-testprovider = { path = "crates/testprovider" }
 
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -26,10 +28,16 @@ thiserror = "2.0.21"
 # `.github/workflows/ci.yml` installs: the two must agree on that shape.
 plugin-rpc = "0.1.0-alpha.11"
 sha2 = "0.11.1"
-# Only the Anthropic judge transport makes HTTP; rustls keeps it off OpenSSL.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+# The judge is the only network user. rig-core is the provider-neutral client (OpenAI,
+# Anthropic, Gemini, Groq, xAI, Mistral, Ollama, and any OpenAI-compatible server through
+# `baseUrl`); tokio is present only to drive rig's async call from the engine's sync loop.
+rig-core = { version = "0.46", features = ["reqwest"] }
+tokio = { version = "1", features = ["rt", "net", "time", "io-util", "macros"] }
 clap = { version = "4.6.7", features = ["derive"] }
 ctrlc = "3"
+# `veridoc init` asks the questions its flags do not answer. Prompts go to stderr, so stdout carries
+# only the paths written, which is what a scripted run reads.
+dialoguer = { version = "0.12.0", default-features = false }
 
 [profile.release]
 overflow-checks = true

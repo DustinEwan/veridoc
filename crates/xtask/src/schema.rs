@@ -127,6 +127,18 @@ pub fn write_schemas(dir: &Path) -> Result<Vec<String>, String> {
     emit(
         dir,
         &mut written,
+        "init-req",
+        &schema_for!(veridoc_protocol::InitReq),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "init-result",
+        &schema_for!(veridoc_protocol::InitResult),
+    )?;
+    emit(
+        dir,
+        &mut written,
         "collect-req",
         &schema_for!(veridoc_protocol::CollectReq),
     )?;

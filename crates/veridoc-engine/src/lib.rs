@@ -3,7 +3,9 @@
 //! The engine never reads a source file of the target language. The only file formats it
 //! reads are `.veridoc/config.json`, `.spec.md`, `.feature`, `.veridoc/verdicts/*.json`, and
 //! the artefact and citation-store files its own claims name. The
-//! `tests/no_language_knowledge.rs` test asserts that boundary mechanically.
+//! `tests/no_language_knowledge.rs` test asserts that boundary mechanically. The one place the
+//! engine touches a project source file is `inputs`, which hashes every tracked file, parsing
+//! none of them, to answer whether this checkout is the one the last run read.
 
 pub mod artefact;
 pub mod bind;
@@ -18,6 +20,7 @@ pub mod feature;
 pub mod format;
 pub mod git;
 pub mod hash;
+pub mod inputs;
 pub mod install;
 pub mod judge;
 pub mod pipeline;

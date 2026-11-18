@@ -1,9 +1,9 @@
-//! JSON-RPC 2.0 framing: one message per line on stdio, request `id` as `u64`, eight methods.
+//! JSON-RPC 2.0 framing: one message per line on stdio, request `id` as `u64`, nine methods.
 //!
 //! The framing itself — the envelope, the error codes, the line reader and writer, the loss
 //! reasons — and the stdio-process transport that starts a plugin and supervises it live in the
 //! `plugin_rpc` mechanism crate, which veridoc and autofuzz both drive, so both are re-exported
-//! here rather than restated. Only the eight method names below are veridoc's own: a plugin
+//! here rather than restated. Only the nine method names below are veridoc's own: a plugin
 //! author writing in Rust imports this module, gets the framing for free, and answers the
 //! vocabulary this profile defines. The process transport is re-exported for the host side, so
 //! the engine names the mechanism's types through this one path too.
@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub enum Method {
     Handshake,
+    Init,
     Collect,
     Resolve,
     Derivable,
@@ -39,6 +40,7 @@ impl MethodName for Method {
     fn name(&self) -> &'static str {
         match self {
             Method::Handshake => "handshake",
+            Method::Init => "init",
             Method::Collect => "collect",
             Method::Resolve => "resolve",
             Method::Derivable => "derivable",
@@ -52,6 +54,7 @@ impl MethodName for Method {
     fn from_wire(name: &str) -> Option<Self> {
         match name {
             "handshake" => Some(Method::Handshake),
+            "init" => Some(Method::Init),
             "collect" => Some(Method::Collect),
             "resolve" => Some(Method::Resolve),
             "derivable" => Some(Method::Derivable),

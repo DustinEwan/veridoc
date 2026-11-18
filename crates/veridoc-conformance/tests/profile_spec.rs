@@ -23,8 +23,8 @@ fn every_schema_the_spec_names_is_committed_beside_it() {
     let spec = spec();
     assert_eq!(
         spec.schema_files().len(),
-        13,
-        "seven params schemas and seven result schemas, less the surface params the profile does not have"
+        15,
+        "eight result schemas and seven params schemas, less the surface params the profile does not have"
     );
 }
 
@@ -162,9 +162,10 @@ fn the_spec_describes_this_host() {
             "cite",
             "collect",
             "derivable",
+            "init",
             "resolve",
             "run",
-            "surface"
+            "surface",
         ])
     );
     assert!(

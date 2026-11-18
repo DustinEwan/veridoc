@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{json, Value};
+use veridoc_testprovider::{self as provider, Handle};
 
 fn tmp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("veridoc-cli-{}-{name}", std::process::id()));
@@ -56,31 +57,24 @@ const FEATURE: &str = "Feature: project scan\n\
     Given the empty-directory fixture\n\
     When the run-probe action runs in that directory\n";
 
-const JUDGE: &str = "#!/bin/sh\n\
-    IFS= read -r req\n\
-    case \"$req\" in\n\
-      *'\"task\":\"s3\"'*) printf '%s\\n' '{\"pairs\": []}';;\n\
-      *'\"task\":\"s2\"'*) printf '%s\\n' '{\"pairs\": []}';;\n\
-      *) printf '%s\\n' '{\"unmentionedClaims\": [], \"unstatedAssertions\": []}';;\n\
-    esac\n";
-
 /// A conforming project whose plugin is the fake, optionally scripted, with the answering
-/// command judge. Returns the project root.
-fn scaffold(name: &str, script: Option<Value>) -> PathBuf {
+/// model judge. Returns the project root and the mock provider its `judge.baseUrl` points at.
+fn scaffold(name: &str, script: Option<Value>) -> (PathBuf, Handle) {
     scaffold_with(name, script, json!({}))
 }
 
-fn scaffold_with(name: &str, script: Option<Value>, config_extra: Value) -> PathBuf {
+fn scaffold_with(name: &str, script: Option<Value>, config_extra: Value) -> (PathBuf, Handle) {
+    // `openai` reads a credential from the environment and this provider needs no real one;
+    // the binary every test spawns inherits this process's environment.
+    static KEY: std::sync::Once = std::sync::Once::new();
+    KEY.call_once(|| std::env::set_var("VERIDOC_TEST_JUDGE_KEY", "test"));
+    let judge = provider::answering(provider::Verdicts::default());
     let root = tmp_dir(name);
     std::fs::create_dir_all(root.join(".veridoc")).unwrap();
     std::fs::create_dir_all(root.join("docs")).unwrap();
     std::fs::create_dir_all(root.join("features")).unwrap();
     std::fs::write(root.join("docs/architecture.spec.md"), SPEC).unwrap();
     std::fs::write(root.join("features/cli.feature"), FEATURE).unwrap();
-
-    let judge = root.join("judge.sh");
-    std::fs::write(&judge, JUDGE).unwrap();
-    set_executable(&judge);
 
     let plugin = match script {
         None => fakeplugin().to_string_lossy().into_owned(),
@@ -102,7 +96,14 @@ fn scaffold_with(name: &str, script: Option<Value>, config_extra: Value) -> Path
 
     let mut config = json!({
         "plugin": { "command": [plugin] },
-        "judge": { "transport": "command", "model": "scripted", "command": ["sh", judge.to_string_lossy()] },
+        "judge": {
+            "provider": "openai",
+            "model": "scripted",
+            "baseUrl": judge.base_url(),
+            "apiKeyEnv": "VERIDOC_TEST_JUDGE_KEY",
+            "timeoutMs": 10000,
+            "maxTokens": 1000,
+        },
         "output": { "dir": "out", "formatters": [] },
     });
     for (key, value) in config_extra.as_object().into_iter().flatten() {
@@ -113,7 +114,7 @@ fn scaffold_with(name: &str, script: Option<Value>, config_extra: Value) -> Path
         serde_json::to_string_pretty(&config).unwrap(),
     )
     .unwrap();
-    root
+    (root, judge)
 }
 
 fn veridoc(args: &[&str]) -> (i32, String, String) {
@@ -130,7 +131,7 @@ fn veridoc(args: &[&str]) -> (i32, String, String) {
 
 #[test]
 fn a_conforming_project_exits_zero_and_writes_the_result() {
-    let root = scaffold("green", None);
+    let (root, judge) = scaffold("green", None);
     let (code, stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 0, "stdout: {stdout}  stderr: {stderr}");
     assert!(root.join(".veridoc/result.json").is_file());
@@ -141,11 +142,14 @@ fn a_conforming_project_exits_zero_and_writes_the_result() {
         "stderr: {stderr}"
     );
     assert!(!stdout.contains("warning:"), "stdout: {stdout}");
+    // The run asked the model. A verdict replayed from `.veridoc/verdicts` would also exit
+    // zero, so the exit code alone does not prove the judge was consulted.
+    assert!(judge.calls() > 0, "the provider received no request");
 }
 
 #[test]
 fn an_undeclared_spec_file_is_the_exact_line_and_no_result() {
-    let root = scaffold("undeclared", None);
+    let (root, _judge) = scaffold("undeclared", None);
     std::fs::write(
         root.join("docs/undeclared.spec.md"),
         "<doc-section name=\"other\">\n\nx\n",
@@ -155,7 +159,7 @@ fn an_undeclared_spec_file_is_the_exact_line_and_no_result() {
     assert_eq!(code, 1);
     assert!(
         stdout.lines().any(|l| l
-            == "docs/undeclared.spec.md:1: no document node in index.doc.ts declares this file"),
+            == "docs/undeclared.spec.md:1: no document node in the project's document tree declares this file"),
         "stdout: {stdout}"
     );
     assert!(
@@ -166,7 +170,7 @@ fn an_undeclared_spec_file_is_the_exact_line_and_no_result() {
 
 #[test]
 fn a_contradicted_claim_names_its_values_and_both_readings() {
-    let root = scaffold(
+    let (root, _judge) = scaffold(
         "contradicted",
         Some(json!({
             "run": {
@@ -196,7 +200,7 @@ fn a_contradicted_claim_names_its_values_and_both_readings() {
 
 #[test]
 fn a_fixture_failure_is_a_run_failure_with_the_plugins_kind() {
-    let root = scaffold(
+    let (root, _judge) = scaffold(
         "fixture",
         Some(json!({
             "run": {
@@ -217,7 +221,7 @@ fn a_fixture_failure_is_a_run_failure_with_the_plugins_kind() {
 
 #[test]
 fn a_deadline_is_a_run_failure_of_kind_deadline() {
-    let root = scaffold_with(
+    let (root, _judge) = scaffold_with(
         "deadline",
         Some(json!({ "_sleepMs": { "run": 800 } })),
         json!({ "run": { "scenarioDeadlineMs": 50 } }),
@@ -231,44 +235,43 @@ fn a_deadline_is_a_run_failure_of_kind_deadline() {
     );
 }
 
-/// Replaces the answering judge with a broken one, keeping the rest of the config.
-fn break_judge(root: &Path, name: &str, script: &str) {
-    let bad = root.join(format!("{name}.sh"));
-    std::fs::write(&bad, script).unwrap();
-    set_executable(&bad);
+/// Repoints the judge at `endpoint`, keeping the rest of the config: the way a transport
+/// fault is simulated now that the judge is a model the engine calls.
+fn break_judge(root: &Path, endpoint: &str) {
     let config_path = root.join(".veridoc/config.json");
     let mut config: Value =
         serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
-    config["judge"]["command"] = json!(["sh", bad.to_string_lossy()]);
+    config["judge"]["baseUrl"] = json!(endpoint);
     std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
 }
 
 #[test]
-fn a_judge_that_exits_nonzero_is_a_run_failure_naming_the_command() {
-    let root = scaffold("judge-exit", None);
-    break_judge(
-        &root,
-        "bad-judge",
-        "#!/bin/sh\necho judge offline >&2\nexit 3\n",
-    );
+fn a_judge_that_cannot_be_reached_is_a_run_failure_naming_the_endpoint() {
+    let (root, _judge) = scaffold("judge-unreachable", None);
+    break_judge(&root, "http://127.0.0.1:1");
     let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 2);
-    assert!(stderr.contains("run failed: judge:"), "stderr: {stderr}");
-    assert!(stderr.contains("judge offline"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("run failed: judge: judge unreachable:"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("127.0.0.1:1"), "stderr: {stderr}");
     assert!(!root.join(".veridoc/result.json").is_file());
 }
 
 #[test]
-fn a_malformed_judge_reply_is_a_run_failure_with_no_outcomes() {
-    let root = scaffold("judge-garbage", None);
-    break_judge(
-        &root,
-        "garbage-judge",
-        "#!/bin/sh\nIFS= read -r req\necho 'not json'\n",
-    );
+fn a_provider_that_answers_badly_is_a_run_failure_with_no_outcomes() {
+    let (root, _judge) = scaffold("judge-refusal", None);
+    // The handle is held until the child has finished: the listener answers its requests.
+    let refusing = provider::failing(500, r#"{"error":{"message":"boom"}}"#);
+    break_judge(&root, refusing.base_url());
     let (code, stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 2);
-    assert!(stderr.contains("run failed: judge:"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("run failed: judge: judge unreachable:"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("boom"), "stderr: {stderr}");
     // A run that cannot judge gives no claim an outcome, passing or contradicted.
     assert!(!stdout.contains("contradicted"), "stdout: {stdout}");
     assert!(!root.join(".veridoc/result.json").is_file());
@@ -276,7 +279,7 @@ fn a_malformed_judge_reply_is_a_run_failure_with_no_outcomes() {
 
 #[test]
 fn an_unspawnable_plugin_is_a_run_failure() {
-    let root = scaffold_with(
+    let (root, _judge) = scaffold_with(
         "unspawnable",
         None,
         json!({ "plugin": { "command": ["/nonexistent/veridoc-plugin"] } }),
@@ -324,7 +327,7 @@ fn witness_prints_the_current_hash_and_nothing_else() {
     collect["claims"][0]["channel"] = json!({
         "artefact": { "path": "evidence.bin", "sha256": digest }
     });
-    let root = scaffold("witness", Some(json!({ "collect": collect })));
+    let (root, _judge) = scaffold("witness", Some(json!({ "collect": collect })));
     std::fs::write(root.join("evidence.bin"), b"transcript bytes").unwrap();
 
     let claim_id = claim_id_of(&root);
@@ -336,7 +339,7 @@ fn witness_prints_the_current_hash_and_nothing_else() {
 
 #[test]
 fn probe_plugin_prints_the_claim_and_referent_tables() {
-    let root = scaffold("probe", None);
+    let (root, _judge) = scaffold("probe", None);
     let (code, stdout, stderr) = veridoc(&["probe-plugin", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 0, "stderr: {stderr}");
     assert!(
@@ -380,7 +383,7 @@ fn validate_plugin_validates_a_checkout_with_an_empty_registry() {
         "exit {:?}\nstdout: {stdout}\nstderr: {stderr}",
         output.status.code()
     );
-    assert!(stdout.contains("10 rules passed"), "stdout: {stdout}");
+    assert!(stdout.contains("11 rules passed"), "stdout: {stdout}");
 }
 
 #[test]
@@ -392,5 +395,169 @@ fn validate_plugin_names_both_alternatives_when_the_argument_is_neither() {
         stderr.contains("no veridoc-plugin.json in")
             && stderr.contains("or pass an installed plugin name"),
         "stderr: {stderr}"
+    );
+}
+
+/// The opt-out a project takes when it names no `judge`: the deterministic stage still gates the
+/// build, and the semantic stage is reported as not run rather than counted as a residue of zero.
+/// This is the case a scripted judge used to hide, and it needs no model to test.
+#[test]
+fn a_project_with_no_judge_reports_the_semantic_stage_as_not_run() {
+    let (root, _judge) = scaffold("no-judge", None);
+    let config = root.join(".veridoc/config.json");
+    let mut value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    value.as_object_mut().unwrap().remove("judge");
+    std::fs::write(&config, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    let (code, stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
+    let printed = format!("{stdout}{stderr}");
+    assert_eq!(code, 0, "exit {code}\n{printed}");
+    assert!(
+        printed.contains("semantic stage not run: no judge is configured in .veridoc/config.json"),
+        "printed: {printed}"
+    );
+    assert!(
+        printed.contains("semantic stage not run: no judge is configured, so prose is unchecked"),
+        "printed: {printed}"
+    );
+}
+
+/// `veridoc stat` is the gate for a job that cannot call a model: it compares the checkout
+/// against the fingerprint the last run recorded, starting no plugin and asking no model.
+#[test]
+fn stat_after_a_run_reports_the_record_current() {
+    let (root, _judge) = scaffold("stat-current", None);
+    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let (code, stdout, stderr) = veridoc(&["stat", "--project", root.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(
+        stdout.contains("record current"),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+}
+
+#[test]
+fn stat_after_an_edit_names_the_changed_file() {
+    let (root, _judge) = scaffold("stat-stale", None);
+    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    std::fs::write(
+        root.join("docs/architecture.spec.md"),
+        format!("{}\nA sentence the record has never seen.\n", SPEC),
+    )
+    .unwrap();
+    let (code, stdout, stderr) = veridoc(&["stat", "--project", root.to_str().unwrap()]);
+    let printed = format!("{stdout}{stderr}");
+    assert_eq!(code, 1, "exit {code}\n{printed}");
+    assert!(
+        printed.contains("changed  docs/architecture.spec.md"),
+        "printed: {printed}"
+    );
+    assert!(printed.contains("record stale"), "printed: {printed}");
+}
+
+#[test]
+fn stat_without_a_record_names_the_run_it_needs() {
+    let (root, _judge) = scaffold("stat-none", None);
+    let (code, _stdout, stderr) = veridoc(&["stat", "--project", root.to_str().unwrap()]);
+    assert_eq!(code, 3, "stderr: {stderr}");
+    assert!(
+        stderr.contains("no .veridoc/inputs.json in") && stderr.contains("veridoc check"),
+        "stderr: {stderr}"
+    );
+}
+
+/// `veridoc init` names the plugin, writes the configuration, and lets the plugin create the files
+/// only it can write. Flags answer every question, so the test needs no terminal.
+#[test]
+fn init_with_flags_writes_the_configuration_and_the_plugins_files() {
+    let root = tmp_dir("init-flags");
+    let (code, stdout, stderr) = veridoc(&[
+        "init",
+        "--project",
+        root.to_str().unwrap(),
+        "--plugin-command",
+        fakeplugin().to_str().unwrap(),
+        "--document",
+        "docs/architecture.spec.md",
+        "--audience",
+        "an author wiring a plugin",
+        "--question",
+        "What must my plugin answer?",
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(root.join(".veridoc/config.json").is_file());
+    assert!(root.join(".veridoc/.gitignore").is_file());
+    assert!(root.join("index.doc.ts").is_file());
+    assert!(root.join("docs/architecture.spec.md").is_file());
+    let written: Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join(".veridoc/config.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        written["plugin"]["command"],
+        json!([fakeplugin().display().to_string()]),
+        "the configuration names the plugin the answers came from"
+    );
+    for line in stdout.lines() {
+        assert!(
+            line.starts_with("wrote "),
+            "stdout carries paths only: {line}"
+        );
+    }
+    assert!(stderr.contains("next:"), "stderr: {stderr}");
+}
+
+#[test]
+fn init_without_a_terminal_names_the_flag_it_cannot_ask() {
+    let root = tmp_dir("init-asked");
+    let (code, stdout, stderr) = veridoc(&[
+        "init",
+        "--project",
+        root.to_str().unwrap(),
+        "--plugin-command",
+        fakeplugin().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 3, "stderr: {stderr}");
+    assert!(
+        stderr.contains("`--audience` is required"),
+        "stderr: {stderr}"
+    );
+    assert!(stdout.is_empty(), "stdout: {stdout}");
+    assert!(
+        !root.join(".veridoc/config.json").exists(),
+        "a run that cannot answer its questions writes nothing"
+    );
+}
+
+#[test]
+fn init_writes_nothing_when_the_plugin_refuses() {
+    let root = tmp_dir("init-refused");
+    std::fs::write(root.join("index.doc.ts"), "the author's own tree\n").unwrap();
+    let (code, _stdout, stderr) = veridoc(&[
+        "init",
+        "--project",
+        root.to_str().unwrap(),
+        "--plugin-command",
+        fakeplugin().to_str().unwrap(),
+        "--document",
+        "docs/architecture.spec.md",
+        "--audience",
+        "an author wiring a plugin",
+        "--question",
+        "What must my plugin answer?",
+    ]);
+    assert_eq!(code, 3, "stderr: {stderr}");
+    assert!(
+        stderr.contains("index.doc.ts exists"),
+        "the plugin's own reason is what the author reads: {stderr}"
+    );
+    assert!(
+        !root.join(".veridoc/config.json").exists(),
+        "a configuration with no root document is a half-written scaffold"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("index.doc.ts")).unwrap(),
+        "the author's own tree\n"
     );
 }

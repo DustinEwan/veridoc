@@ -128,7 +128,7 @@ fn an_undeclared_spec_file_is_reported_at_line_one() {
     let lines = diagnostics(run(&root, collect()));
     assert!(
         lines.contains(
-            &"docs/undeclared.spec.md:1: no document node in index.doc.ts declares this file"
+            &"docs/undeclared.spec.md:1: no document node in the project's document tree declares this file"
                 .to_string()
         ),
         "got {lines:?}"
@@ -223,7 +223,7 @@ fn an_undeclared_observable_is_reported() {
     let lines = diagnostics(run(&root, wire));
     assert_eq!(
         lines[0],
-        "src/cli.doc.ts:3: observable exit.unknown is not declared in any .obs.ts"
+        "src/cli.doc.ts:3: observable exit.unknown is not declared by the plugin"
     );
 }
 
@@ -377,7 +377,9 @@ fn an_unsatisfied_node_without_a_reason_is_reported() {
             .any(|l| l == "docs/missing.spec.md:1: declared node is neither satisfied nor notApplicable with a reason")
             && lines
                 .iter()
-                .any(|l| l == "docs/architecture.spec.md:1: no document node in index.doc.ts declares this file"),
+                .any(|l| {
+                    l == "docs/architecture.spec.md:1: no document node in the project's document tree declares this file"
+                }),
         "got {lines:?}"
     );
 }

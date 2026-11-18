@@ -70,7 +70,19 @@ fn connect_handshakes_and_reports_the_declared_capabilities() {
         .expect("the default script conforms");
     assert_eq!(handshake.name, "veridoc-fakeplugin");
     assert_eq!(handshake.protocol_version, "veridoc/1");
-    assert_eq!(handshake.capabilities.len(), 7);
+    assert_eq!(
+        handshake.capabilities,
+        vec![
+            veridoc_protocol::Capability::Initialization,
+            veridoc_protocol::Capability::Collect,
+            veridoc_protocol::Capability::Resolution,
+            veridoc_protocol::Capability::Derivability,
+            veridoc_protocol::Capability::Bivalence,
+            veridoc_protocol::Capability::Execution,
+            veridoc_protocol::Capability::Citation,
+            veridoc_protocol::Capability::Surface,
+        ]
+    );
     let collected: veridoc_protocol::CollectResult = client
         .collect("/tmp", Duration::from_secs(30))
         .payload()

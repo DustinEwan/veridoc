@@ -6,6 +6,7 @@ mod init;
 mod install_plugin;
 mod plugins_cmd;
 mod probe_plugin;
+mod stat;
 mod validate_plugin;
 mod witness;
 
@@ -43,10 +44,38 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Write `.veridoc/config.json`, `.veridoc/.gitignore`, and `index.doc.ts`.
+    /// Report whether this checkout is the one the last completed run recorded, by comparing every
+    /// file the commit would carry against `.veridoc/inputs.json`. Exits 0 when the record covers
+    /// this checkout, 1 when it does not, 3 when there is no record. No plugin is started, no
+    /// harness is built, and no model is called: the gate for a job that has no model to ask.
+    Stat {
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+    },
+    /// Write `.veridoc/config.json` and `.veridoc/.gitignore`, then ask the plugin to create the
+    /// files only it can write. Every question has a flag, so a script answers them all, and a
+    /// question a script cannot answer is refused by naming its flag.
     Init {
         #[arg(long, default_value = ".")]
         project: PathBuf,
+        /// An installed plugin, as `veridoc plugins` lists it.
+        #[arg(long)]
+        plugin: Option<String>,
+        /// A plugin command line for a plugin nobody installed, for example "node plugin/server.mjs".
+        #[arg(long)]
+        plugin_command: Option<String>,
+        /// The first document's path, relative to the project.
+        #[arg(long)]
+        document: Option<String>,
+        /// Who reads the first document.
+        #[arg(long)]
+        audience: Option<String>,
+        /// The one question the first document answers.
+        #[arg(long)]
+        question: Option<String>,
+        /// Let the plugin replace a file it would create.
+        #[arg(long)]
+        force: bool,
     },
     /// Print the artefact's current sha256 and nothing else. `claim_name` is the name the report
     /// prints, `<subject>#<predicate>` (`docs/decisions/0009-the-subject-is-named-not-derived-from-a-path.md`).
@@ -109,7 +138,24 @@ fn main() -> ! {
             config,
             force,
         } => check::run(&project, config.as_deref(), force, &STOP),
-        Commands::Init { project } => init::run(&project),
+        Commands::Stat { project } => stat::run(&project),
+        Commands::Init {
+            project,
+            plugin,
+            plugin_command,
+            document,
+            audience,
+            question,
+            force,
+        } => init::run(&init::Args {
+            project: &project,
+            plugin,
+            plugin_command,
+            document,
+            audience,
+            question,
+            force,
+        }),
         Commands::Witness {
             claim_name,
             project,

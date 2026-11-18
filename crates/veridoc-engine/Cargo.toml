@@ -12,9 +12,11 @@ serde_json.workspace = true
 schemars.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
-reqwest.workspace = true
+rig-core.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 # The scripted plugin the tests drive; the same binary `CARGO_BIN_EXE_…` cannot cross
 # packages, so the tests also locate it by walking ancestors of `current_exe`.
 veridoc-fakeplugin = { path = "../veridoc-fakeplugin" }
+veridoc-testprovider.workspace = true

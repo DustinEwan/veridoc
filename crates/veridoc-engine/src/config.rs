@@ -89,27 +89,41 @@ impl Default for RunConfig {
     }
 }
 
-/// The judge transport. `"command"` runs `command` with the brief JSON on stdin and a verdict
-/// JSON on stdout; `"anthropic"` POSTs to the Messages API. `"command"` is the default
-/// because it is testable without a network.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The judge: one model the engine calls over its provider's chat wire. `provider` selects
+/// the wire, the endpoint, and the credential variable; `baseUrl` redirects an
+/// OpenAI-compatible server (radiance, vLLM, LM Studio, a gateway) without changing anything
+/// else about the run; `additionalParams` merges provider-specific fields into the request
+/// body. There is no judge program anywhere in this design: a judge is a model, and the
+/// engine reaches it (`docs/decisions/0012`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct JudgeConfig {
-    pub transport: String,
-    pub command: Option<Vec<String>>,
-    pub model: Option<String>,
+    pub provider: String,
+    pub model: String,
+    pub base_url: Option<String>,
+    /// The variable holding the credential, for a deployment that keeps it under a name
+    /// other than the provider's usual one.
+    pub api_key_env: Option<String>,
     pub prompt_version: String,
+    /// The window for one model call. A reasoning model spends most of it thinking, so the
+    /// default is generous, and a call that exceeds it is a run failure rather than a check
+    /// that did not run.
     pub timeout_ms: u64,
+    pub max_tokens: u64,
+    pub additional_params: Option<Value>,
 }
 
 impl Default for JudgeConfig {
     fn default() -> Self {
         JudgeConfig {
-            transport: "command".to_string(),
-            command: None,
-            model: None,
+            provider: String::new(),
+            model: String::new(),
+            base_url: None,
+            api_key_env: None,
             prompt_version: "veridoc-prompt-1".to_string(),
-            timeout_ms: 120_000,
+            timeout_ms: 900_000,
+            max_tokens: 32_000,
+            additional_params: None,
         }
     }
 }
@@ -158,7 +172,10 @@ pub struct Config {
     pub plugin: PluginConfig,
     pub coverage: CoverageConfig,
     pub run: RunConfig,
-    pub judge: JudgeConfig,
+    /// Absent means the semantic stage does not run. The deterministic checks still decide
+    /// every claim they can, and a claim that needs a model's judgement is reported as
+    /// unevaluated rather than passed.
+    pub judge: Option<JudgeConfig>,
     pub output: OutputConfig,
     pub citation_stores: Vec<CitationStoreConfig>,
 }
@@ -170,7 +187,7 @@ impl Default for Config {
             plugin: PluginConfig::default(),
             coverage: CoverageConfig::default(),
             run: RunConfig::default(),
-            judge: JudgeConfig::default(),
+            judge: None,
             output: OutputConfig::default(),
             citation_stores: Vec::new(),
         }
@@ -186,7 +203,6 @@ impl Config {
                 veridoc_protocol::PROTOCOL_VERSION
             )));
         }
-        let has = |c: &Option<Vec<String>>| c.as_ref().is_some_and(|a| !a.is_empty());
         if self.plugin.command.as_deref().unwrap_or(&[]).is_empty() {
             // A missing `command` is only legal when the name is installed: the registry
             // holds argv the user installed on purpose, so the engine never guesses a
@@ -213,18 +229,21 @@ impl Config {
                 "run.scenarioDeadlineMs must be greater than zero",
             ));
         }
-        if self.judge.transport != "command" && self.judge.transport != "anthropic" {
-            return Err(ConfigError::msg(
-                "judge.transport must be \"command\" or \"anthropic\"",
-            ));
-        }
-        if self.judge.transport == "command" && !has(&self.judge.command) {
-            return Err(ConfigError::msg(
-                "judge.command is required when judge.transport is \"command\"",
-            ));
-        }
-        if self.judge.model.as_deref().unwrap_or("").is_empty() {
-            return Err(ConfigError::msg("judge.model is required"));
+        if let Some(judge) = &self.judge {
+            crate::judge::Provider::parse(&judge.provider).map_err(ConfigError::msg)?;
+            if judge.model.is_empty() {
+                return Err(ConfigError::msg("judge.model is required"));
+            }
+            if judge.timeout_ms == 0 {
+                return Err(ConfigError::msg(
+                    "judge.timeoutMs must be greater than zero",
+                ));
+            }
+            if judge.max_tokens == 0 {
+                return Err(ConfigError::msg(
+                    "judge.maxTokens must be greater than zero",
+                ));
+            }
         }
         self.formatters()?;
         let mut seen = Vec::new();
@@ -325,25 +344,11 @@ impl LoadedConfig {
         Ok(self.launch_of(argv))
     }
 
-    /// The judge launch for a `"command"` transport, resolved the same way as the plugin.
-    pub fn judge_launch(&self) -> Result<Launch, ConfigError> {
-        let argv = self
-            .config
-            .judge
-            .command
-            .clone()
-            .filter(|a| !a.is_empty())
-            .ok_or_else(|| {
-                ConfigError::msg("judge.command is required when judge.transport is \"command\"")
-            })?;
-        Ok(self.launch_of(argv))
-    }
-
     fn launch_of(&self, argv: Vec<String>) -> Launch {
-        // `plugin.command` and `judge.command` are written relative to the project that owns
-        // the config, so a relative file argument is made absolute against the project root,
-        // not the invoking cwd. autofuzz resolves against the invoking cwd because there the
-        // base and the cwd coincide.
+        // `plugin.command` is written relative to the project that owns the config, so a
+        // relative file argument is made absolute against the project root, not the invoking
+        // cwd. autofuzz resolves against the invoking cwd because there the base and the cwd
+        // coincide.
         let root = self.root.clone();
         let argv: Vec<String> = argv
             .into_iter()
@@ -436,67 +441,6 @@ pub fn discover(start: &Path) -> Result<PathBuf, ConfigError> {
             )));
         }
     }
-}
-
-/// The `.veridoc/` skeleton `veridoc init` writes. The committed set is the config plus the
-/// citation stores; everything else the engine produces is ignored.
-pub fn init(dir: &Path) -> Result<(), ConfigError> {
-    let cfg_dir = dir.join(CONFIG_DIR);
-    std::fs::create_dir_all(&cfg_dir).map_err(|e| ConfigError::Read {
-        path: cfg_dir.clone(),
-        source: e,
-    })?;
-    let config_path = cfg_dir.join(CONFIG_FILE_NAME);
-    if config_path.exists() {
-        return Err(ConfigError::msg(format!(
-            "{} already exists; not overwriting",
-            config_path.display()
-        )));
-    }
-    let template = serde_json::json!({
-        "protocol": veridoc_protocol::PROTOCOL_VERSION,
-        "plugin": { "command": ["node", "plugin/veridoc-plugin.js"] },
-        "coverage": { "required": 0.6 },
-        "run": { "scenarioDeadlineMs": 30_000 },
-        "judge": {
-            "transport": "command",
-            "command": ["node", "tools/judge.mjs"],
-            "model": "scripted-1",
-            "promptVersion": "veridoc-prompt-1",
-            "timeoutMs": 120_000
-        },
-        "output": { "dir": ".veridoc/out", "formatters": ["markdown"] },
-        "citationStores": []
-    });
-    std::fs::write(
-        &config_path,
-        serde_json::to_string_pretty(&template).expect("template is serializable") + "\n",
-    )
-    .map_err(|e| ConfigError::Read {
-        path: config_path,
-        source: e,
-    })?;
-    std::fs::write(
-        cfg_dir.join(".gitignore"),
-        "result.json\nlast-result-hash\nout/\nengine.log\nverdicts/\n",
-    )
-    .map_err(|e| ConfigError::Read {
-        path: cfg_dir.join(".gitignore"),
-        source: e,
-    })?;
-    let index = dir.join("index.doc.ts");
-    if !index.exists() {
-        std::fs::write(
-            &index,
-            "import { tree } from \"@veridoc/tree\";\n\n\
-             export default tree({\n  concepts: [],\n  documents: [],\n});\n",
-        )
-        .map_err(|e| ConfigError::Read {
-            path: index,
-            source: e,
-        })?;
-    }
-    Ok(())
 }
 
 fn absolute(path: &Path) -> Result<PathBuf, ConfigError> {

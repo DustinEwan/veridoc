@@ -27,6 +27,7 @@ pub struct Handshake {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Capability {
+    Initialization,
     Collect,
     Resolution,
     Derivability,
@@ -42,6 +43,7 @@ impl Capability {
     /// a capability the plugin did not declare.
     pub fn name(&self) -> &'static str {
         match self {
+            Capability::Initialization => "initialization",
             Capability::Collect => "collect",
             Capability::Resolution => "resolution",
             Capability::Derivability => "derivability",
@@ -223,7 +225,7 @@ pub struct Citation {
     pub turn: Option<u32>,
 }
 
-/// One declared document node, as `index.doc.ts` reports it.
+/// One declared document node, as the project's document tree reports it through `collect`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DocumentDecl {
@@ -259,6 +261,34 @@ pub struct ActionDecl {
 pub struct Skipped {
     pub file: String,
     pub reason: String,
+}
+
+/// `init` parameters: what the host collected from the author, so the plugin can create the files
+/// only it can write. The host writes none of them: `0013` puts the root document with the plugin,
+/// and `docs/decisions/0006` fixes what a project adds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InitReq {
+    /// The project root, absolute, as the host resolved it.
+    pub root: String,
+    /// The first document of the tree: its audience, its one question, and the `.spec.md` path it
+    /// reads. A second document is an edit to the index, not an answer to a prompt.
+    pub document: DocumentDecl,
+    /// Replace a file the plugin would create. Without it, a file that already exists is an error
+    /// naming it, because a scaffold that overwrites an author's prose is worse than none.
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// What `init` reports: the files the plugin created, and the work only the author can do.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InitResult {
+    /// Every file the plugin created, relative to `root`.
+    pub written: Vec<String>,
+    /// One sentence each: the claims to declare, the prose to write, the command to run next.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub next: Vec<String>,
 }
 
 /// The `params` of `collect`: the one project root the plugin indexes.

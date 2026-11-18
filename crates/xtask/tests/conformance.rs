@@ -132,7 +132,7 @@ fn every_scripted_defect_fires_exactly_the_rules_it_names() {
     let rules = spec["conformance"]["rules"]
         .as_array()
         .expect("the profile declares its own rules");
-    assert_eq!(rules.len(), 7, "the profile declares seven rules");
+    assert_eq!(rules.len(), 8, "the profile declares eight rules");
     for rule in rules {
         let id = rule["id"].as_str().expect("every rule has an id");
         let scripted = rule["defect"]["env"]
@@ -163,7 +163,7 @@ fn every_scripted_defect_fires_exactly_the_rules_it_names() {
 #[test]
 fn a_capability_the_plugin_did_not_declare_gates_its_rule() {
     let exe = fakeplugin();
-    let script = r#"{"handshake":{"protocolVersion":"veridoc/1","name":"veridoc-fakeplugin","version":"0.1.0","languages":["typescript"],"capabilities":["collect","resolution","derivability","bivalence","execution","citation"]}}"#;
+    let script = r#"{"handshake":{"protocolVersion":"veridoc/1","name":"veridoc-fakeplugin","version":"0.1.0","languages":["typescript"],"capabilities":["initialization","collect","resolution","derivability","bivalence","execution","citation"]}}"#;
     let report = driven(&exe, "no-surface", script);
     assert_eq!(
         report.rules_skipped(),

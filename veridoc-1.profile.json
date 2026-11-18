@@ -37,6 +37,11 @@
     "surface": {
       "result": "docs/schema/veridoc-1/surface-result.json",
       "requiresCapability": "surface"
+    },
+    "init": {
+      "params": "docs/schema/veridoc-1/init-req.json",
+      "result": "docs/schema/veridoc-1/init-result.json",
+      "requiresCapability": "initialization"
     }
   },
   "capabilities": {
@@ -60,6 +65,9 @@
     },
     "surface": {
       "ifAbsent": "the report carries no uncovered-symbol section and says the plugin declared no surface, rather than reporting that every public symbol is covered"
+    },
+    "initialization": {
+      "ifAbsent": "`veridoc init` writes `.veridoc/config.json`, prints that the plugin declares no initialization, and stops, so the author creates the root document with the plugin's own tooling rather than with a scaffold the plugin cannot maintain"
     }
   },
   "loss": {
@@ -144,6 +152,15 @@
           "run": ["target/release/veridoc-fakeplugin"],
           "env": ["VERIDOC_FAKE_SCRIPT={\"surface\":{\"referents\":[]}}"],
           "expectViolation": ["surface-schema"]
+        }
+      },
+      {
+        "id": "init-creates-the-project",
+        "expectation": "init, asked for a scratch project, answers an instance of docs/schema/veridoc-1/init-result.json naming at least one file it wrote and every one of those files exists; a second request over the same project is refused by naming one of them, because force was not given.",
+        "defect": {
+          "run": ["target/release/veridoc-fakeplugin"],
+          "env": ["VERIDOC_FAKE_SCRIPT={\"init\":{\"written\":[],\"next\":[]}}"],
+          "expectViolation": ["init-creates-the-project"]
         }
       }
     ]

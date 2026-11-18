@@ -47,13 +47,25 @@ fn every_contract_type_has_a_schema() {
     let capability: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(set.join("capability.json")).unwrap())
             .unwrap();
+    let capability_names: Vec<&str> = capability["enum"]
+        .as_array()
+        .expect("capability enum")
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
     assert_eq!(
-        capability["enum"]
-            .as_array()
-            .expect("capability enum")
-            .len(),
-        7,
-        "Capability must carry the seven wire names"
+        capability_names,
+        [
+            "initialization",
+            "collect",
+            "resolution",
+            "derivability",
+            "bivalence",
+            "execution",
+            "citation",
+            "surface"
+        ],
+        "Capability's wire names changed"
     );
 
     // `static-analysis` keeps the spec's kebab spelling, not serde's camelCase default.
