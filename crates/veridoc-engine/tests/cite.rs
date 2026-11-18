@@ -6,7 +6,7 @@ use veridoc_engine::bind::{BindError, BoundChannel, BoundClaim};
 use veridoc_engine::cite::{self, CiteOutcome};
 use veridoc_engine::execute::Outcome;
 use veridoc_protocol::{Call, Loss};
-use veridoc_protocol::{CiteResult, Citation, Kind};
+use veridoc_protocol::{Citation, CiteResult, Kind};
 
 fn citation_claim(store: &str, id: &str) -> BoundClaim {
     BoundClaim {
@@ -17,8 +17,8 @@ fn citation_claim(store: &str, id: &str) -> BoundClaim {
         text: "The scan walks upward because a nested invocation must reuse the root.".into(),
         file: "src/cli.doc.ts".into(),
         line: 20,
-        supports: vec![],
-        referent_id: "vd:r:probe".into(),
+        subject: "probe".into(),
+        referent_id: "veridoc:referent:probe".into(),
         signature: "function probe(dir: string): number".into(),
         channel: BoundChannel::Citation {
             store: store.into(),
@@ -28,7 +28,10 @@ fn citation_claim(store: &str, id: &str) -> BoundClaim {
     }
 }
 
-fn cite_ok(resolved: Vec<(String, String, Option<String>)>, unresolved: Vec<(String, String)>) -> impl Fn(&[Citation]) -> Call<CiteResult> {
+fn cite_ok(
+    resolved: Vec<(String, String, Option<String>)>,
+    unresolved: Vec<(String, String)>,
+) -> impl Fn(&[Citation]) -> Call<CiteResult> {
     move |_| {
         Call::Result(CiteResult {
             resolved: resolved
@@ -58,7 +61,10 @@ fn supported(_: &BoundClaim, _: &str) -> Outcome {
 fn a_readable_citation_is_judged_and_supports() {
     let outcome = cite::cite_all(
         &[citation_claim("session", "01a1e512")],
-        cite_ok(vec![("01a1e512".into(), "we reuse the first root".into(), None)], vec![]),
+        cite_ok(
+            vec![("01a1e512".into(), "we reuse the first root".into(), None)],
+            vec![],
+        ),
         supported,
     )
     .expect("cite");
@@ -82,7 +88,10 @@ fn an_unresolved_citation_blocks_with_the_plugins_reason() {
         outcome.errors[0].diagnostic(),
         "src/cli.doc.ts:20: citation tickets:42 does not resolve: ticket does not exist"
     );
-    assert!(matches!(outcome.errors[0], BindError::CitationUnresolved { .. }));
+    assert!(matches!(
+        outcome.errors[0],
+        BindError::CitationUnresolved { .. }
+    ));
 }
 
 #[test]
@@ -94,7 +103,10 @@ fn unreadable_text_supports_with_the_residue_flag_and_warns() {
     )
     .expect("cite");
     assert_eq!(outcome.cited[0].outcome, Outcome::Supported);
-    assert!(outcome.cited[0].residue, "unreadable text is the residue metric");
+    assert!(
+        outcome.cited[0].residue,
+        "unreadable text is the residue metric"
+    );
     assert_eq!(
         outcome.warnings[0].message,
         "claim c111111111111111b cites session:01a1e512, whose text could not be read"
@@ -106,7 +118,11 @@ fn a_non_terminal_state_warns_without_failing_the_run() {
     let outcome = cite::cite_all(
         &[citation_claim("tickets", "42")],
         cite_ok(
-            vec![("42".into(), "reuse the first root".into(), Some("open".into()))],
+            vec![(
+                "42".into(),
+                "reuse the first root".into(),
+                Some("open".into()),
+            )],
             vec![],
         ),
         supported,

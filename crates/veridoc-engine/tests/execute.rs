@@ -9,11 +9,14 @@ use serde_json::json;
 use veridoc_engine::bind::{BoundChannel, BoundClaim};
 use veridoc_engine::execute::{self, Outcome, READING_CODE_WRONG, READING_SCENARIO_WRONG};
 use veridoc_engine::plugin::{Launch, PluginClient};
-use veridoc_protocol::{Asserts, AssertLeaf, Check, Kind, RunFailureKind};
+use veridoc_protocol::{AssertLeaf, Asserts, Check, Kind, RunFailureKind};
 
 fn fakeplugin() -> PathBuf {
     let exe = std::env::current_exe().expect("current_exe");
-    let start = exe.parent().expect("test binary in a directory").to_path_buf();
+    let start = exe
+        .parent()
+        .expect("test binary in a directory")
+        .to_path_buf();
     if let Some(found) = find_fakeplugin(&start) {
         return found;
     }
@@ -58,8 +61,8 @@ fn scenario_claim(asserts: Asserts) -> BoundClaim {
         text: "A missing project root is refused.".into(),
         file: "src/cli.doc.ts".into(),
         line: 3,
-        supports: vec![],
-        referent_id: "vd:r:probe".into(),
+        subject: "probe".into(),
+        referent_id: "veridoc:referent:probe".into(),
         signature: "function probe(dir: string): number".into(),
         channel: BoundChannel::Scenario {
             scenario_id: "config/rejects-missing-root".into(),
@@ -89,9 +92,11 @@ fn client(script: serde_json::Value) -> PluginClient {
 #[test]
 fn a_holding_tree_is_supported() {
     let client = client(json!({})); // the default run answers exit.code = "2"
-    let executed = execute::execute(&[scenario_claim(exit_code(json!(2)))], 30_000, |req, host| {
-        client.run(req, host)
-    })
+    let executed = execute::execute(
+        &[scenario_claim(exit_code(json!(2)))],
+        30_000,
+        |req, host| client.run(req, host),
+    )
     .expect("run");
     assert_eq!(executed[0].outcome, Outcome::Supported);
     assert!(executed[0].observed.is_empty());
@@ -100,9 +105,11 @@ fn a_holding_tree_is_supported() {
 #[test]
 fn a_failing_tree_contradicts_with_values_and_both_readings() {
     let client = client(json!({}));
-    let executed = execute::execute(&[scenario_claim(exit_code(json!(0)))], 30_000, |req, host| {
-        client.run(req, host)
-    })
+    let executed = execute::execute(
+        &[scenario_claim(exit_code(json!(0)))],
+        30_000,
+        |req, host| client.run(req, host),
+    )
     .expect("run");
     assert_eq!(executed[0].outcome, Outcome::Contradicted);
     assert_eq!(executed[0].observed, vec!["exit.code = 2".to_string()]);
@@ -152,9 +159,11 @@ fn ok_false_is_a_run_failure_with_the_plugins_kind() {
             "failure": { "kind": "fixture", "detail": "fixture blew up" }
         }
     }));
-    let failure = execute::execute(&[scenario_claim(exit_code(json!(2)))], 30_000, |req, host| {
-        client.run(req, host)
-    })
+    let failure = execute::execute(
+        &[scenario_claim(exit_code(json!(2)))],
+        30_000,
+        |req, host| client.run(req, host),
+    )
     .expect_err("ok: false must stop the run");
     assert_eq!(failure.kind, RunFailureKind::Fixture);
     assert!(failure.detail.contains("fixture blew up"));

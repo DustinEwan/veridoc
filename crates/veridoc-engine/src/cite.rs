@@ -3,7 +3,7 @@
 //! text supports the reason is the same S2 comparison the judge already makes, so this
 //! module takes a judge callback rather than a model client.
 
-use veridoc_protocol::{Call, CiteResult, Citation};
+use veridoc_protocol::{Call, Citation, CiteResult};
 
 use crate::bind::{BindError, BoundChannel, BoundClaim};
 use crate::execute::Outcome;
@@ -74,7 +74,8 @@ pub fn cite_all(
         })
         .collect();
 
-    let answer = sentence("cite", cite(&requests)).map_err(|why| format!("citation store: {why}"))?;
+    let answer =
+        sentence("cite", cite(&requests)).map_err(|why| format!("citation store: {why}"))?;
 
     let mut out = CiteOutcome::default();
     for claim in citing {
@@ -121,8 +122,8 @@ pub fn cite_all(
                 residue: true,
             });
             out.warnings.push(Warning {
-                    file: Some(claim.file.clone()),
-                    line: Some(claim.line),
+                file: Some(claim.file.clone()),
+                line: Some(claim.line),
                 message: format!(
                     "claim {} cites {store}:{id}, whose text could not be read",
                     claim.id

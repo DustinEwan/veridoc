@@ -82,6 +82,15 @@ impl RefToken {
             RefToken::Concept { name } => format!("concept|{name}"),
         }
     }
+
+    /// The author's name for the thing the claim is about. It is the left half of the claim's
+    /// readable name, and it comes from the author rather than from the path the code sits in
+    /// (`docs/decisions/0009-the-subject-is-named-not-derived-from-a-path.md`).
+    pub fn subject_name(&self) -> &str {
+        match self {
+            RefToken::Symbol { name, .. } | RefToken::Concept { name } => name,
+        }
+    }
 }
 
 /// The single channel field of a claim. Flat, not externally tagged, so the wire shape
@@ -123,7 +132,6 @@ pub struct RawClaim {
     pub predicate: String,
     pub text: String,
     pub channel: Channel,
-    pub supports: Vec<String>,
     pub file: String,
     pub line: u32,
 }
@@ -215,30 +223,6 @@ pub struct Citation {
     pub turn: Option<u32>,
 }
 
-/// A document node's selection. Every present field must match; an all-`None` `Selects`
-/// selects nothing and is reported rather than treated as "select everything".
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Selects {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub concept: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<Vec<Kind>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub referent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claims: Option<Vec<String>>,
-}
-
-impl Selects {
-    pub fn is_empty(&self) -> bool {
-        self.concept.is_none()
-            && self.kind.is_none()
-            && self.referent.is_none()
-            && self.claims.is_none()
-    }
-}
-
 /// One declared document node, as `index.doc.ts` reports it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -246,7 +230,6 @@ pub struct DocumentDecl {
     pub path: String,
     pub audience: String,
     pub question: String,
-    pub selects: Selects,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_applicable: Option<String>,
 }
@@ -486,7 +469,7 @@ pub struct SurfaceResult {
     pub referents: Vec<SurfaceReferent>,
 }
 
-/// S1: which selected claims the section does not mention, and which assertions in the
+/// S1: which named claims the section does not mention, and which assertions in the
 /// section no claim states.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

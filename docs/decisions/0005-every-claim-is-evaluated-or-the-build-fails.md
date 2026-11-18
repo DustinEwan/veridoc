@@ -12,7 +12,7 @@ the same condition that veridoc exists to detect, recorded as a passing run.
 This is a build-time check and it ends in a result, so every path that a claim can take has to mean something.
 Three kinds of evidence exist and they are not interchangeable. A scenario produces values and compares them
 with an assertion. An artefact resolves and matches a recorded hash. A judge compares a section with the
-claims that it selects. Anything else is not evidence.
+claims that it names. Anything else is not evidence.
 
 One of those channels has a gate in front of it. An assertion that cannot fail is not evidence, so a claim
 may only take the scenario channel when its assertion is bivalent, which means both outcomes are attainable
@@ -28,13 +28,15 @@ thing: a referent that does not resolve, a checkable claim with no scenario, a s
 an action that calls something other than the claim's referent, an assertion that reads an observable the
 action cannot produce, an assertion that cannot fail.
 
-A run failure is not a claim outcome. A build that will not compile, a plugin that will not start, a fixture
-that cannot be constructed, and a scenario that outlives its deadline are recorded once at scenario level and
-make the run red. They never produce a claim state, because one broken build would otherwise print thousands
-of unevidenced claims and teach a reader to ignore the report.
+A run failure is not a claim outcome. A build that will not compile and a plugin that will not start stop the whole
+run, and a fixture that cannot be constructed or a scenario that outlives its deadline is recorded once against the
+claim it was reached for, leaving every other claim its verdict. Neither kind ever produces a claim state, because a
+run that did not happen is not evidence.
 
-Coverage is a figure that the project sets and that the run compares, so the requirement rises over time
-instead of being complete on the first day.
+Coverage is a figure that the project sets and that the run compares, so the requirement rises over time instead of
+being complete on the first day. It counts how much of the declared surface carries a claim. It is a different thing
+from the rule that every claim is named by a section and every reference resolves, which is enforced in full from the
+first run.
 
 ## Consequences
 
@@ -44,7 +46,7 @@ sampling default becomes one because a second sample of a converging model buys 
 
 The residue narrows to what it should have been. It no longer holds claims that nobody got round to
 evaluating, because those are errors. It holds the claims that no channel can reach, which in v1 means a
-provenance claim whose cited text cannot be read and a semantic claim whose verdict is missing, stale, or
+provenance claim whose cited text cannot be read and a semantic claim whose verdict is stale or
 ambiguous.
 
 Nothing detects an assertion that can fail but tests the wrong thing. Bivalence is the strongest property

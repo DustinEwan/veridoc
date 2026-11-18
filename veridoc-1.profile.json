@@ -1,41 +1,41 @@
 {
   "mechanism": "prpc/1",
-  "protocolVersion": "vd/1",
+  "protocolVersion": "veridoc/1",
   "manifest": "veridoc-plugin.json",
   "methods": {
     "collect": {
-      "params": "docs/schema/vd-1/collect-req.json",
-      "result": "docs/schema/vd-1/collect-result.json",
+      "params": "docs/schema/veridoc-1/collect-req.json",
+      "result": "docs/schema/veridoc-1/collect-result.json",
       "requiresCapability": "collect"
     },
     "resolve": {
-      "params": "docs/schema/vd-1/resolve-req.json",
-      "result": "docs/schema/vd-1/resolve-result.json",
+      "params": "docs/schema/veridoc-1/resolve-req.json",
+      "result": "docs/schema/veridoc-1/resolve-result.json",
       "requiresCapability": "resolution"
     },
     "derivable": {
-      "params": "docs/schema/vd-1/derivable-req.json",
-      "result": "docs/schema/vd-1/derivable-result.json",
+      "params": "docs/schema/veridoc-1/derivable-req.json",
+      "result": "docs/schema/veridoc-1/derivable-result.json",
       "requiresCapability": "derivability"
     },
     "bivalence": {
-      "params": "docs/schema/vd-1/bivalence-req.json",
-      "result": "docs/schema/vd-1/bivalence-result.json",
+      "params": "docs/schema/veridoc-1/bivalence-req.json",
+      "result": "docs/schema/veridoc-1/bivalence-result.json",
       "requiresCapability": "bivalence"
     },
     "run": {
-      "params": "docs/schema/vd-1/run-request.json",
-      "result": "docs/schema/vd-1/run-response.json",
+      "params": "docs/schema/veridoc-1/run-request.json",
+      "result": "docs/schema/veridoc-1/run-response.json",
       "requiresCapability": "execution",
       "deadlineField": "deadlineMs"
     },
     "cite": {
-      "params": "docs/schema/vd-1/cite-req.json",
-      "result": "docs/schema/vd-1/cite-result.json",
+      "params": "docs/schema/veridoc-1/cite-req.json",
+      "result": "docs/schema/veridoc-1/cite-result.json",
       "requiresCapability": "citation"
     },
     "surface": {
-      "result": "docs/schema/vd-1/surface-result.json",
+      "result": "docs/schema/veridoc-1/surface-result.json",
       "requiresCapability": "surface"
     }
   },
@@ -69,7 +69,7 @@
       "exited": "the plugin ended itself with a call in flight: the same run failure and exit code 2, naming the exit status the plugin left",
       "killed": "veridoc ended the plugin, by deadline or by interrupt: the same run failure and exit code 2, attributed to the host rather than to the project",
       "noAnswer": "the wait passed with the request waiting: for `run` the scenario is a run failure of kind `deadline` carrying its own millisecond figure, and for any other method the run is a run failure with exit code 2",
-      "unusable-result": "the plugin answered a method in a shape vd/1 cannot read: the plugin counts as lost, so the run is a run failure with exit code 2 and `veridoc install-plugin` records nothing"
+      "unusable-result": "the plugin answered a method in a shape veridoc/1 cannot read: the plugin counts as lost, so the run is a run failure with exit code 2 and `veridoc install-plugin` records nothing"
     },
     "added": ["unusable-result"]
   },
@@ -79,7 +79,7 @@
     "rules": [
       {
         "id": "collect-schema",
-        "expectation": "collect answers an instance of docs/schema/vd-1/collect-result.json that reports at least one claim of the emitted project and names no skipped sidecar.",
+        "expectation": "collect answers an instance of docs/schema/veridoc-1/collect-result.json that reports at least one claim of the emitted project and names no skipped sidecar.",
         "defect": {
           "run": ["target/release/veridoc-fakeplugin"],
           "env": ["VERIDOC_FAKE_SCRIPT={\"collect\":{\"concepts\":\"project-scan\"}}"],
@@ -92,7 +92,7 @@
         "dependsOn": ["collect-schema"],
         "defect": {
           "run": ["target/release/veridoc-fakeplugin"],
-          "env": ["VERIDOC_FAKE_SCRIPT={\"resolve\":{\"resolved\":[{\"ref\":\"src/cli.ts|probe\",\"referentId\":\"vd:r:probe\",\"signature\":\"function probe(dir: string): number\"},{\"ref\":\"src/__veridoc_absent__.ts|absentSymbol\",\"referentId\":\"vd:r:absent\",\"signature\":\"function absent(): void\"}],\"unresolved\":[]}}"],
+          "env": ["VERIDOC_FAKE_SCRIPT={\"resolve\":{\"resolved\":[{\"ref\":\"src/cli.ts|probe\",\"referentId\":\"veridoc:referent:probe\",\"signature\":\"function probe(dir: string): number\"},{\"ref\":\"src/__veridoc_absent__.ts|absentSymbol\",\"referentId\":\"veridoc:referent:absent\",\"signature\":\"function absent(): void\"}],\"unresolved\":[]}}"],
           "expectViolation": ["resolve-known"]
         }
       },
@@ -118,7 +118,7 @@
       },
       {
         "id": "run-returns-values",
-        "expectation": "run answers an instance of docs/schema/vd-1/run-response.json with ok true, a value for every observable the emitted project declares, one satisfied answer for every leaf id the engine issued, and no field named outcome anywhere.",
+        "expectation": "run answers an instance of docs/schema/veridoc-1/run-response.json with ok true, a value for every observable the emitted project declares, one satisfied answer for every leaf id the engine issued, and no field named outcome anywhere.",
         "dependsOn": ["collect-schema", "resolve-known"],
         "defect": {
           "run": ["target/release/veridoc-fakeplugin"],
@@ -138,7 +138,7 @@
       },
       {
         "id": "surface-schema",
-        "expectation": "surface, asked with no params at all, answers an instance of docs/schema/vd-1/surface-result.json naming at least one referent of the emitted project.",
+        "expectation": "surface, asked with no params at all, answers an instance of docs/schema/veridoc-1/surface-result.json naming at least one referent of the emitted project.",
         "dependsOn": ["collect-schema"],
         "defect": {
           "run": ["target/release/veridoc-fakeplugin"],

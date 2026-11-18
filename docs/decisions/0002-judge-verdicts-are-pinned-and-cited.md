@@ -22,25 +22,27 @@ sits downstream of that block.
 
 ## Decision
 
-Judge tasks are bounded and none of them asks whether documentation is good. S1 reports the claims that
-prose does not mention and the assertions in prose that no claim states. S2 reports the pair of spans that
-disagree. The judge proposes no change to code and no change to prose.
+Judge tasks are bounded and none of them asks whether documentation is good. S1 reports the assertions in prose that no
+claim states; a claim that no section names is a blocking error before the judge runs, so S1 does not report that
+direction. S2 reports the pair of spans that disagree. S3 compares the audience and question of every document node.
+The judge proposes no change to code and no change to prose.
 
 Every citation that a judge returns is re-verified deterministically before the verdict is kept, and a
 verdict whose citation fails verification is not kept and is a run failure.
 
-A verdict carries the hash of one section, the hash of the claims that section selects, the revision of the
-referents behind those claims, the model id, and the prompt version, and those values are its identity. A
-verdict is stale when any of them moves, and staleness is checked before a verdict is read.
+A verdict carries the hash of one section's assembled body, which is the authored prose with its gathered content
+resolved, the hash of the claims the section names, the revision of the referents behind those claims, the model id, and
+the prompt version, and those values are its identity. A verdict is stale when any of them moves, and staleness is
+checked before a verdict is read. Gathered content that changes moves the verdict even when the author touched no
+prose.
 
-Each task runs one sample, because a reasoning model converges and a second sample of it buys nothing. The
-`k` knob and the sample-disagreement detector of an earlier draft are deleted: the default of one already
-disabled the detector.
+Each task runs one sample, because a reasoning model converges and a second sample of it buys nothing, and the
+sample-disagreement detector of an earlier draft is deleted.
 
-An S2 contradiction whose two spans re-verify blocks, because publishing a sentence the claims deny is the
-failure the project exists to prevent. S1 and citation-state findings report. A judge transport error, a
-timeout, an unusable verdict, or a verdict whose spans cannot be located is a run failure: a check that did
-not run makes the build red rather than green.
+An S2 contradiction whose two spans re-verify blocks, because publishing a sentence the claims deny is the failure the
+project exists to prevent. S1, S3, and citation-state findings report. A judge transport error, a timeout, an unusable
+verdict, or a verdict whose spans cannot be located is recorded as a run failure against the claim it was reached for,
+and every other claim keeps its verdict: a check that did not run is never read as a check that passed.
 
 ## Consequences
 
@@ -52,5 +54,5 @@ to be different identities. That clause is dropped. Nothing in v1 records author
 rule in `docs/spec.md` covers the case the clause was reaching for without needing to know who wrote
 what: evidence has to move with the prose and with the code, in both directions.
 
-The selection in the index already matches each section with the claims that it selects, so the judge reads
-one section at a time rather than a cross product of the claim graph.
+Each section carries its own references to the claims it names, in the `.spec.md` file rather than in the index, so the
+judge reads one section at a time rather than a cross product of the claim graph.

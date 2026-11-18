@@ -19,7 +19,6 @@ pub fn dispatch(
     doc: &ResultDocument,
     result_json: &Path,
 ) -> Result<(), String> {
-
     for entry in &config.output.formatters {
         match entry {
             Value::String(name) => match name.as_str() {
@@ -48,22 +47,26 @@ pub fn unchanged(root: &Path, hash: &str) -> bool {
 }
 
 /// One file per document node under `{output.dir}/markdown/`, mirroring the tree: the
-/// authored spans, then the selected claims with subject and signature in words. A claim
+/// authored spans, then the named claims with subject and signature in words. A claim
 /// carrying the residue flag carries the marker `[unverified]` before its text.
 fn markdown(root: &Path, config: &Config, doc: &ResultDocument) -> Result<(), String> {
     let base = root.join(&config.output.dir).join("markdown");
     for node in &doc.tree {
-        let sections: Vec<_> = doc.sections.iter().filter(|s| s.file == node.path).collect();
+        let sections: Vec<_> = doc
+            .sections
+            .iter()
+            .filter(|s| s.file == node.path)
+            .collect();
         let mut out = String::new();
         out.push_str(&format!("# {}\n\n", node.path));
         for section in sections {
-            out.push_str(&format!("## {}\n\n", section.heading));
+            out.push_str(&format!("## {}\n\n", section.subject));
             for span in &section.spans {
                 out.push_str(&format!("{}\n\n", span.text));
             }
-            if !section.selects.is_empty() {
+            if !section.claims.is_empty() {
                 out.push_str("### Claims\n\n");
-                for id in &section.selects {
+                for id in &section.claims {
                     let Some(claim) = doc.claims.iter().find(|c| c.id == *id) else {
                         continue;
                     };
@@ -79,6 +82,18 @@ fn markdown(root: &Path, config: &Config, doc: &ResultDocument) -> Result<(), St
                     out.push_str(&format!(
                         "  - subject: {} — {}\n",
                         claim.referent_id, claim.signature
+                    ));
+                }
+                out.push('\n');
+            }
+            if !section.injections.is_empty() {
+                out.push_str("### Injected\n\n");
+                for pulled in &section.injections {
+                    out.push_str(&format!(
+                        "- doc-each source=\"{}\": {} {}\n",
+                        pulled.source,
+                        pulled.items,
+                        if pulled.items == 1 { "value" } else { "values" }
                     ));
                 }
                 out.push('\n');
@@ -148,7 +163,9 @@ fn command(
     if let Some(mut pipe) = child.stderr.take() {
         let _ = pipe.read_to_string(&mut stderr);
     }
-    let status = child.wait().map_err(|e| format!("formatter \"{name}\": {e}"))?;
+    let status = child
+        .wait()
+        .map_err(|e| format!("formatter \"{name}\": {e}"))?;
     if !status.success() {
         let code = status
             .code()

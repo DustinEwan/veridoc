@@ -69,21 +69,20 @@ fn a_claim_round_trips_with_its_channel() {
             artefact: None,
             citation: None,
         },
-        supports: vec!["docs/architecture.spec.md#refuses".into()],
         file: "src/scanner.doc.ts".into(),
         line: 3,
     };
     let value = serde_json::to_value(&claim).unwrap();
     assert_eq!(value["subject"]["kind"], "symbol");
     assert_eq!(value["channel"]["scenario"], "config/rejects-missing-root");
-    assert_eq!(
-        serde_json::from_value::<RawClaim>(value).unwrap(),
-        claim
-    );
+    assert_eq!(serde_json::from_value::<RawClaim>(value).unwrap(), claim);
     assert_eq!(claim.channel.populated(), 1);
     assert_eq!(claim.subject.key(), "src/scanner.ts|parseConfig");
     assert_eq!(
-        RefToken::Concept { name: "project-scan".into() }.key(),
+        RefToken::Concept {
+            name: "project-scan".into()
+        }
+        .key(),
         "concept|project-scan"
     );
 }
@@ -116,16 +115,6 @@ fn channel_counts_its_populated_channels() {
 }
 
 #[test]
-fn selects_reports_itself_empty_when_no_field_is_set() {
-    assert!(Selects::default().is_empty());
-    let with_kind = Selects {
-        kind: Some(vec![Kind::Requires]),
-        ..Selects::default()
-    };
-    assert!(!with_kind.is_empty());
-}
-
-#[test]
 fn run_round_trips() {
     let req = RunRequest {
         scenario_id: "config/rejects-missing-root".into(),
@@ -154,11 +143,11 @@ fn run_round_trips() {
         failure: None,
     };
     let value = serde_json::to_value(&resp).unwrap();
-    assert!(value.get("failure").is_none(), "failure is omitted, not null");
-    assert_eq!(
-        serde_json::from_value::<RunResponse>(value).unwrap(),
-        resp
+    assert!(
+        value.get("failure").is_none(),
+        "failure is omitted, not null"
     );
+    assert_eq!(serde_json::from_value::<RunResponse>(value).unwrap(), resp);
 }
 
 #[test]
@@ -169,10 +158,6 @@ fn collect_round_trips() {
             path: "docs/architecture.spec.md".into(),
             audience: "an author".into(),
             question: "What must my plugin answer?".into(),
-            selects: Selects {
-                concept: Some("project-scan".into()),
-                ..Selects::default()
-            },
             not_applicable: None,
         }],
         claims: vec![],
@@ -217,7 +202,7 @@ fn handshake_and_surface_round_trip() {
     );
     let surface = SurfaceResult {
         referents: vec![SurfaceReferent {
-            referent_id: "vd:r:abc".into(),
+            referent_id: "veridoc:referent:abc".into(),
             name: "parseConfig".into(),
             public: true,
         }],
@@ -233,7 +218,7 @@ fn resolve_derivable_and_cite_round_trip() {
     let r = ResolveResult {
         resolved: vec![ResolvedRef {
             reference: "src/scanner.ts|parseConfig".into(),
-            referent_id: "vd:r:abc".into(),
+            referent_id: "veridoc:referent:abc".into(),
             signature: "function parseConfig(root: string): ProjectConfig".into(),
         }],
         unresolved: vec![UnresolvedRef {
@@ -243,10 +228,7 @@ fn resolve_derivable_and_cite_round_trip() {
     };
     let value = serde_json::to_value(&r).unwrap();
     assert_eq!(value["resolved"][0]["ref"], "src/scanner.ts|parseConfig");
-    assert_eq!(
-        serde_json::from_value::<ResolveResult>(value).unwrap(),
-        r
-    );
+    assert_eq!(serde_json::from_value::<ResolveResult>(value).unwrap(), r);
     let d = DerivableResult {
         facts: vec!["parseConfig takes one parameter named root.".into()],
     };
@@ -282,10 +264,7 @@ fn bivalence_carries_the_witness_answers() {
     };
     let value = serde_json::to_value(&b).unwrap();
     assert_eq!(value["method"], "witnesses");
-    assert_eq!(
-        serde_json::from_value::<BivalenceResult>(value).unwrap(),
-        b
-    );
+    assert_eq!(serde_json::from_value::<BivalenceResult>(value).unwrap(), b);
     let static_value = serde_json::to_value(BivalenceMethod::StaticAnalysis).unwrap();
     assert_eq!(static_value, "static-analysis");
 }
@@ -312,10 +291,7 @@ fn verdicts_round_trip() {
     };
     let value = serde_json::to_value(&s2).unwrap();
     assert_eq!(value["pairs"][0]["spanA"], "sp1");
-    assert_eq!(
-        serde_json::from_value::<S2Verdict>(value).unwrap(),
-        s2
-    );
+    assert_eq!(serde_json::from_value::<S2Verdict>(value).unwrap(), s2);
     let s3 = S3Verdict {
         pairs: vec![S3Pair {
             node_a: "docs/a.spec.md".into(),
@@ -342,11 +318,7 @@ fn every_capability_wire_spelling_is_a_single_lowercase_word() {
         let wire = serde_json::to_value(cap).unwrap();
         let word = wire.as_str().expect("a capability is a string");
         assert!(
-            !word.is_empty()
-                && word
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase())
-                    && !word.contains('_'),
+            !word.is_empty() && word.chars().all(|c| c.is_ascii_lowercase()) && !word.contains('_'),
             "capability wire spelling {word:?} is not a single lowercase word"
         );
     }

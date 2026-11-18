@@ -40,7 +40,9 @@ pub struct Cached {
 }
 
 pub fn path(root: &Path, key: &str) -> PathBuf {
-    root.join(".veridoc").join("verdicts").join(format!("{key}.json"))
+    root.join(".veridoc")
+        .join("verdicts")
+        .join(format!("{key}.json"))
 }
 
 /// A cache read that fails for any reason is a miss; the cache may not break a run.
@@ -66,12 +68,20 @@ pub fn cited_ids(task: Task, verdict: &Value) -> Vec<String> {
     let mut ids = Vec::new();
     match task {
         Task::S1 => {
-            for entry in verdict["unstatedAssertions"].as_array().into_iter().flatten() {
+            for entry in verdict["unstatedAssertions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
                 if let Some(span) = entry["span"].as_str() {
                     ids.push(span.to_string());
                 }
             }
-            for claim in verdict["unmentionedClaims"].as_array().into_iter().flatten() {
+            for claim in verdict["unmentionedClaims"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
                 if let Some(id) = claim.as_str() {
                     ids.push(id.to_string());
                 }

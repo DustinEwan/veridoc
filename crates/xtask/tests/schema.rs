@@ -10,7 +10,7 @@ fn repo_root() -> std::path::PathBuf {
 
 #[test]
 fn every_contract_type_has_a_schema() {
-    let dir = std::env::temp_dir().join(format!("vd-xtask-schema-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("veridoc-xtask-schema-{}", std::process::id()));
     let files = write_schemas(&dir).expect("schemas write");
     let set = dir.join(schema_dir(PROTOCOL_VERSION));
     assert!(
@@ -48,7 +48,10 @@ fn every_contract_type_has_a_schema() {
         serde_json::from_str(&std::fs::read_to_string(set.join("capability.json")).unwrap())
             .unwrap();
     assert_eq!(
-        capability["enum"].as_array().expect("capability enum").len(),
+        capability["enum"]
+            .as_array()
+            .expect("capability enum")
+            .len(),
         7,
         "Capability must carry the seven wire names"
     );
@@ -79,7 +82,8 @@ fn every_contract_type_has_a_schema() {
 
 #[test]
 fn committed_schema_matches_generated_schema() {
-    let dir = std::env::temp_dir().join(format!("vd-xtask-schema-fresh-{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("veridoc-xtask-schema-fresh-{}", std::process::id()));
     let files = write_schemas(&dir).expect("schemas write");
     let committed = repo_root().join("docs/schema");
     let mut stale = Vec::new();
@@ -128,7 +132,8 @@ fn committed_schema_matches_generated_schema() {
 /// the Rust parser that accepts it.
 #[test]
 fn every_wire_field_name_is_camel_case() {
-    let dir = std::env::temp_dir().join(format!("vd-xtask-schema-camel-{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("veridoc-xtask-schema-camel-{}", std::process::id()));
     let files = write_schemas(&dir).expect("schemas write");
     let mut offenders = Vec::new();
     for file in &files {

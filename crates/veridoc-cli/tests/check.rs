@@ -7,7 +7,7 @@ use std::process::Command;
 use serde_json::{json, Value};
 
 fn tmp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("vd-cli-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("veridoc-cli-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir.canonicalize().unwrap()
@@ -15,7 +15,10 @@ fn tmp_dir(name: &str) -> PathBuf {
 
 fn fakeplugin() -> PathBuf {
     let exe = std::env::current_exe().expect("current_exe");
-    let start = exe.parent().expect("test binary in a directory").to_path_buf();
+    let start = exe
+        .parent()
+        .expect("test binary in a directory")
+        .to_path_buf();
     if let Some(found) = find_fakeplugin(&start) {
         return found;
     }
@@ -40,11 +43,11 @@ fn find_fakeplugin(start: &Path) -> Option<PathBuf> {
     }
 }
 
-const SPEC: &str = "# Architecture\n\
+const SPEC: &str = "<doc-section name=\"probe\">\n\
     \n\
-    ## What the scanner refuses {#refuses selects=\"concept:project-scan\"}\n\
+    ## What the scanner refuses\n\
     \n\
-    The scanner walks upward and stops at the first project root.\n";
+    The scanner walks upward and stops at the first project root <doc-claim name=\"rejects-missing-project-root\"/>.\n";
 
 const FEATURE: &str = "Feature: project scan\n\
     \n\
@@ -128,8 +131,7 @@ fn veridoc(args: &[&str]) -> (i32, String, String) {
 #[test]
 fn a_conforming_project_exits_zero_and_writes_the_result() {
     let root = scaffold("green", None);
-    let (code, stdout, stderr) =
-        veridoc(&["check", "--project", root.to_str().unwrap()]);
+    let (code, stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 0, "stdout: {stdout}  stderr: {stderr}");
     assert!(root.join(".veridoc/result.json").is_file());
     // The surface capability reports the uncovered public symbol; a warning with no
@@ -144,14 +146,16 @@ fn a_conforming_project_exits_zero_and_writes_the_result() {
 #[test]
 fn an_undeclared_spec_file_is_the_exact_line_and_no_result() {
     let root = scaffold("undeclared", None);
-    std::fs::write(root.join("docs/undeclared.spec.md"), "# U\n\n## S {#s}\n\nx\n").unwrap();
-    let (code, stdout, _stderr) =
-        veridoc(&["check", "--project", root.to_str().unwrap()]);
+    std::fs::write(
+        root.join("docs/undeclared.spec.md"),
+        "<doc-section name=\"other\">\n\nx\n",
+    )
+    .unwrap();
+    let (code, stdout, _stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 1);
     assert!(
-        stdout
-            .lines()
-            .any(|l| l == "docs/undeclared.spec.md:1: no document node in index.doc.ts declares this file"),
+        stdout.lines().any(|l| l
+            == "docs/undeclared.spec.md:1: no document node in index.doc.ts declares this file"),
         "stdout: {stdout}"
     );
     assert!(
@@ -172,16 +176,21 @@ fn a_contradicted_claim_names_its_values_and_both_readings() {
             }
         })),
     );
-    let (code, stdout, _stderr) =
-        veridoc(&["check", "--project", root.to_str().unwrap()]);
+    let (code, stdout, _stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 1);
     let line = stdout
         .lines()
         .find(|l| l.contains("is contradicted"))
         .unwrap_or_else(|| panic!("stdout: {stdout}"));
     assert!(line.contains("exit.code = 1"), "{line}");
-    assert!(line.contains("the code is wrong and the sentence is right"), "{line}");
-    assert!(line.contains("the scenario or the assertion is wrong and the code is right"), "{line}");
+    assert!(
+        line.contains("the code is wrong and the sentence is right"),
+        "{line}"
+    );
+    assert!(
+        line.contains("the scenario or the assertion is wrong and the code is right"),
+        "{line}"
+    );
     assert!(!root.join(".veridoc/result.json").is_file());
 }
 
@@ -196,11 +205,11 @@ fn a_fixture_failure_is_a_run_failure_with_the_plugins_kind() {
             }
         })),
     );
-    let (code, _stdout, stderr) =
-        veridoc(&["check", "--project", root.to_str().unwrap()]);
+    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 2);
     assert!(
-        stderr.contains("run failed: fixture: scenario config/rejects-missing-root: fixture blew up"),
+        stderr
+            .contains("run failed: fixture: scenario config/rejects-missing-root: fixture blew up"),
         "stderr: {stderr}"
     );
     assert!(!root.join(".veridoc/result.json").is_file());
@@ -213,13 +222,11 @@ fn a_deadline_is_a_run_failure_of_kind_deadline() {
         Some(json!({ "_sleepMs": { "run": 800 } })),
         json!({ "run": { "scenarioDeadlineMs": 50 } }),
     );
-    let (code, _stdout, stderr) =
-        veridoc(&["check", "--project", root.to_str().unwrap()]);
+    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 2);
     assert!(
-        stderr.contains(
-            "run failed: deadline: scenario config/rejects-missing-root outlived 50 ms"
-        ),
+        stderr
+            .contains("run failed: deadline: scenario config/rejects-missing-root outlived 50 ms"),
         "stderr: {stderr}"
     );
 }
@@ -239,9 +246,12 @@ fn break_judge(root: &Path, name: &str, script: &str) {
 #[test]
 fn a_judge_that_exits_nonzero_is_a_run_failure_naming_the_command() {
     let root = scaffold("judge-exit", None);
-    break_judge(&root, "bad-judge", "#!/bin/sh\necho judge offline >&2\nexit 3\n");
-    let (code, _stdout, stderr) =
-        veridoc(&["check", "--project", root.to_str().unwrap()]);
+    break_judge(
+        &root,
+        "bad-judge",
+        "#!/bin/sh\necho judge offline >&2\nexit 3\n",
+    );
+    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 2);
     assert!(stderr.contains("run failed: judge:"), "stderr: {stderr}");
     assert!(stderr.contains("judge offline"), "stderr: {stderr}");
@@ -256,8 +266,7 @@ fn a_malformed_judge_reply_is_a_run_failure_with_no_outcomes() {
         "garbage-judge",
         "#!/bin/sh\nIFS= read -r req\necho 'not json'\n",
     );
-    let (code, stdout, stderr) =
-        veridoc(&["check", "--project", root.to_str().unwrap()]);
+    let (code, stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 2);
     assert!(stderr.contains("run failed: judge:"), "stderr: {stderr}");
     // A run that cannot judge gives no claim an outcome, passing or contradicted.
@@ -272,8 +281,7 @@ fn an_unspawnable_plugin_is_a_run_failure() {
         None,
         json!({ "plugin": { "command": ["/nonexistent/veridoc-plugin"] } }),
     );
-    let (code, _stdout, stderr) =
-        veridoc(&["check", "--project", root.to_str().unwrap()]);
+    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 2);
     assert!(stderr.contains("run failed: plugin:"), "stderr: {stderr}");
 }
@@ -283,17 +291,16 @@ fn a_bad_configuration_is_a_usage_error() {
     let root = tmp_dir("badconfig");
     std::fs::create_dir_all(root.join(".veridoc")).unwrap();
     std::fs::write(root.join(".veridoc/config.json"), "{ not json").unwrap();
-    let (code, _stdout, stderr) =
-        veridoc(&["check", "--project", root.to_str().unwrap()]);
+    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 3);
     assert!(stderr.starts_with("veridoc: "), "stderr: {stderr}");
 }
 
-/// The default claim's id: the fake resolves `src/cli.ts|probe` to `vd:r:probe`.
+/// The default claim's name: the author's subject `probe` joined with the predicate slug.
 fn claim_id_of(_root: &Path) -> String {
-    // Identity is the resolved referent joined with the predicate, hashed by the engine's
-    // own rule; recomputing it here keeps the test honest about what `witness` matches.
-    veridoc_engine::hash::claim_id("vd:r:probe", "rejects-missing-project-root")
+    // The name is the author's subject joined with the predicate slug by the engine's own
+    // rule; recomputing it here keeps the test honest about what `witness` matches.
+    veridoc_engine::hash::claim_name("probe", "rejects-missing-project-root")
 }
 
 fn veridoc_engine_hex64(bytes: &[u8]) -> String {
@@ -330,13 +337,18 @@ fn witness_prints_the_current_hash_and_nothing_else() {
 #[test]
 fn probe_plugin_prints_the_claim_and_referent_tables() {
     let root = scaffold("probe", None);
-    let (code, stdout, stderr) =
-        veridoc(&["probe-plugin", "--project", root.to_str().unwrap()]);
+    let (code, stdout, stderr) = veridoc(&["probe-plugin", "--project", root.to_str().unwrap()]);
     assert_eq!(code, 0, "stderr: {stderr}");
-    assert!(stdout.contains("plugin veridoc-fakeplugin 0.1.0"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("plugin veridoc-fakeplugin 0.1.0"),
+        "stdout: {stdout}"
+    );
     assert!(stdout.contains("claims:"), "stdout: {stdout}");
     assert!(stdout.contains("referents:"), "stdout: {stdout}");
-    assert!(stdout.contains("vd:r:probe"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("veridoc:referent:probe"),
+        "stdout: {stdout}"
+    );
 }
 
 #[test]
@@ -363,7 +375,11 @@ fn validate_plugin_validates_a_checkout_with_an_empty_registry() {
         .expect("run veridoc");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert!(output.status.success(), "exit {:?}\nstdout: {stdout}\nstderr: {stderr}", output.status.code());
+    assert!(
+        output.status.success(),
+        "exit {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
     assert!(stdout.contains("10 rules passed"), "stdout: {stdout}");
 }
 
@@ -373,7 +389,8 @@ fn validate_plugin_names_both_alternatives_when_the_argument_is_neither() {
     let (code, _stdout, stderr) = veridoc(&["validate-plugin", dir.to_str().unwrap()]);
     assert_eq!(code, 3);
     assert!(
-        stderr.contains("no veridoc-plugin.json in") && stderr.contains("or pass an installed plugin name"),
+        stderr.contains("no veridoc-plugin.json in")
+            && stderr.contains("or pass an installed plugin name"),
         "stderr: {stderr}"
     );
 }

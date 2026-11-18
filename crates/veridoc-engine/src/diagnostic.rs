@@ -27,7 +27,12 @@ impl Diagnostic {
     }
 
     pub fn warning(file: Option<String>, line: Option<u32>, message: impl Into<String>) -> Self {
-        Self { file, line, message: message.into(), severity: Severity::Warning }
+        Self {
+            file,
+            line,
+            message: message.into(),
+            severity: Severity::Warning,
+        }
     }
 
     /// `{file}:{line}: {message}` for errors and `{file}:{line}: warning: {message}` for

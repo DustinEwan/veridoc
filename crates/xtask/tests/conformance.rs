@@ -50,7 +50,7 @@ fn find_fakeplugin(start: &Path) -> Option<PathBuf> {
 #[test]
 fn fakeplugin_passes_the_conformance_suite() {
     let exe = fakeplugin();
-    let dir = std::env::temp_dir().join(format!("vd-conformance-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("veridoc-conformance-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let rendered = Command::new(&exe)
         .args(["--emit-conformance"])
@@ -86,7 +86,7 @@ fn fakeplugin_passes_the_conformance_suite() {
 
 /// Render the fixture and drive the suite once, with `VERIDOC_FAKE_SCRIPT` set for the plugin.
 fn driven(exe: &Path, name: &str, script: &str) -> veridoc_conformance::Report {
-    let dir = std::env::temp_dir().join(format!("vd-defect-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("veridoc-defect-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let rendered = Command::new(exe)
         .args(["--emit-conformance"])
@@ -120,13 +120,13 @@ fn violated(exe: &Path, name: &str, script: &str) -> Vec<String> {
         .collect()
 }
 
-/// Each rule of `vd-1.profile.json` names a scripted defect and the exact set of rules that
+/// Each rule of `veridoc-1.profile.json` names a scripted defect and the exact set of rules that
 /// defect must make report a violation. Running every one of them is what makes the spec's
 /// `defect` fields checked rather than asserted (§12 item 4).
 #[test]
 fn every_scripted_defect_fires_exactly_the_rules_it_names() {
     let exe = fakeplugin();
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vd-1.profile.json");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../veridoc-1.profile.json");
     let text = std::fs::read_to_string(&path).expect("the profile spec is readable");
     let spec: serde_json::Value = serde_json::from_str(&text).expect("the profile spec is json");
     let rules = spec["conformance"]["rules"]
@@ -163,7 +163,7 @@ fn every_scripted_defect_fires_exactly_the_rules_it_names() {
 #[test]
 fn a_capability_the_plugin_did_not_declare_gates_its_rule() {
     let exe = fakeplugin();
-    let script = r#"{"handshake":{"protocolVersion":"vd/1","name":"veridoc-fakeplugin","version":"0.1.0","languages":["typescript"],"capabilities":["collect","resolution","derivability","bivalence","execution","citation"]}}"#;
+    let script = r#"{"handshake":{"protocolVersion":"veridoc/1","name":"veridoc-fakeplugin","version":"0.1.0","languages":["typescript"],"capabilities":["collect","resolution","derivability","bivalence","execution","citation"]}}"#;
     let report = driven(&exe, "no-surface", script);
     assert_eq!(
         report.rules_skipped(),

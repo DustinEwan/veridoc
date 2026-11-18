@@ -51,7 +51,7 @@ intended. [Judge tasks](#judge-tasks) reduces that failure and does not remove i
 | Claim | One atomic assertion about one subject, of a declared kind, with an assertion tree or a citation | `referentId#predicate`, stored as a hash |
 | Scenario | A declared world and one action, bound to the claim's referent | Its file and scenario id |
 | Document node | One declared element of the document tree, with an audience and one question | Its path in the tree |
-| Verdict | A pinned judge answer about one section against the claims it selects | `sha(sectionHash, claimSetHash, referentRevision, model, promptVersion)` |
+| Verdict | A pinned judge answer about one section against the claims it names | `sha(sectionHash, claimSetHash, referentRevision, model, promptVersion)` |
 
 A claim is atomic in one specific sense: it has one subject and one predicate. A sentence that describes
 two behaviours is two claims. This is what makes deduplication possible, and it is the rule that an agent
@@ -63,31 +63,34 @@ and rejecting a predicate that matches more than one assertion slug.
 veridoc maintains a claim graph and a document tree, and it never writes prose into the tree.
 
 The claim graph is organised by concept. A claim exists once, and its identity is its subject and its
-predicate. The document tree is organised by audience. A document node selects claims and orders them.
+predicate. The document tree is organised by audience. A document node orders the sections, and each
+section names the claims its prose is about.
 
 The reason for the split is the duplication failure. Facts do not follow the file layout of an
 implementation, and they do not follow the reading order of a reader, so a layout that keeps facts in one
 of those shapes makes a reader copy them elsewhere. An author who needs a fact in two documents edits one
-claim and selects it twice.
+claim and names it in two sections.
 
-Prose is written by hand, in `.spec.md` files, and the engine never writes it. The engine injects the text
-of a selected claim into the section that selects it, and it reports every section that selects nothing. A
-section and a selected claim that describe the same behaviour and disagree are an S2 finding.
+Prose is written by hand, in `.spec.md` files, and the engine never writes it. The engine resolves every
+`<doc-claim>` in a section to the claim it names, and it reports every section that names no claim. Where
+prose asks for a value the code decides, a `<doc-each>` placeholder is filled at assembly, in the output
+and never in the authored file. A section and a named claim that describe the same behaviour and disagree
+are an S2 finding.
 
 ## Project layout
 
 ```
 project/
-  index.doc.ts                    the document tree: closed, obligating
+  index.doc.<ext>                   the document tree: closed, obligating
   src/
-    scanner.ts                    the code
-    scanner.doc.ts                claims about scanner.ts
+    scanner.<ext>                   the code
+    scanner.doc.<ext>               claims about scanner.<ext>
   docs/
     architecture.spec.md          authored prose in keyed sections
     harness-authoring.spec.md
   features/
     <concept>.feature             scenarios: a world and an action
-    <concept>.obs.ts              declared observables and actions
+    <concept>.obs.<ext>             declared observables and actions
   .veridoc/
     config.json                   coverage requirement, plugin command, run deadline, judge, output formatters, citation stores
     verdicts/*.json               the semantic cache, each entry holding the brief that produced the verdict
@@ -96,11 +99,15 @@ project/
     out/<formatter>/              where the formatters write
 ```
 
+`<ext>` is the extension of the project's own source language. The host names no language and no extension: it
+asks a plugin to collect, and the plugin decides which files of its own language carry the index, the claims, and
+the vocabulary. A layout rule that names `.ts` is a rule a project in any other language cannot satisfy.
+
 A claim lives in the sidecar beside the file that holds its subject, which keeps documentation out of the
 code and keeps review local. A concept is a field on the claim rather than a directory, so the same
 deduplication rule works across files without a claims directory. A `.spec.md` file is ordinary markdown
-that a person or an agent edits, with an id on every section, so a claim can point at the section that it
-supports and a section can point at the claims that support it.
+that a person or an agent edits, with a `name` on every section naming the subject the section covers, so
+the engine can show which claims that section covers.
 
 ## Claims
 
@@ -149,13 +156,17 @@ declares concepts alongside document nodes, and a concept has a stable id that n
 
 ### Identity and the one-owner rule
 
-Claim identity is the resolved referent id joined with the predicate slug, and the store keeps that pair as
-a fixed-length hash. A second claim with the same identity is an error that reports the path of the
-existing owner. The author then edits the owner or chooses a different predicate, which is the behaviour
-that a duplication-prone author will not choose on their own.
+Claim identity is the author's subject name joined with the predicate slug, and the store keeps that pair
+as a fixed-length hash. The readable pair is the claim's name wherever a person or an agent reads or types
+it: the result document, the report, the leaf citations a verdict makes, the argument to `veridoc witness`,
+and the `name` of the `<doc-section>` that covers it.
+The hash is a value, not a name, and it appears in two places only, as a suffix on both claims when two of
+them slug alike, and in the names of cache files that no one reads. A second claim with the same identity is
+an error that reports the path of the existing owner. The author then edits the owner or chooses a different
+predicate, which is the behaviour that a duplication-prone author will not choose on their own.
 
-A repeat of an existing claim in a second document is not a second claim. It is a selection of the first
-one, and the injection step writes it in both places.
+A repeat of an existing claim in a second document is not a second claim. It is a second `<doc-claim>`
+naming the same claim, and the claim stays one fact.
 
 ### The derivability ban
 
@@ -242,7 +253,7 @@ about a sentence beside a list of observables and checks than about a sentence b
 
 ## The document tree
 
-`index.doc.ts` declares the concepts, the document nodes, and the obligation each node carries.
+The index declares the concepts, the document nodes, and the obligation each node carries.
 
 ```ts
 import { tree } from "@veridoc/tree";
@@ -254,13 +265,11 @@ export default tree({
       path: "docs/harness-authoring.spec.md",
       audience: "an author writing a new plugin",
       question: "What must my plugin answer, and in what order?",
-      selects: { concept: "harness-contract" },
     }),
     tree.doc({
       path: "docs/AGENTS.spec.md",
       audience: "an agent working in this repository",
       question: "Which rules bind every change here?",
-      selects: { kind: ["requires", "invariant"] },
     }),
   ],
 });
@@ -278,9 +287,42 @@ visible.
 
 ### Sections
 
-Every section of a `.spec.md` file carries an id. A section states the claims that it selects, and a claim
-states the sections that it supports, and both directions are checked. A section that selects nothing is reported, and
-that report is the deterministic half of what would otherwise be an S1 finding.
+A section opens with `<doc-section name="SUBJECT">` on a line of its own and ends at the next opener or the
+end of the file. Its `name` is the claim subject the prose is about. A `<doc-claim name="PREDICATE"/>`
+written inside a sentence names one claim, and the claim it names is `SUBJECT#PREDICATE`, the readable name
+the engine prints for the claim. Both directions are checked: a reference that names no claim stops the
+build, and so does a claim that no section names. A section that names no claim is reported, and that report
+is the deterministic half of what would otherwise be an S1 finding. A heading carries no meaning to the
+engine, so an author uses headings inside a section wherever the prose wants one, and an element inside a
+fenced code block is inert, so a document can show this grammar without using it. The one exception is the
+block a `<doc-each>` repeats below: a placeholder inside that block is live, because a table of values is
+exactly the thing an author must not be asked to copy.
+
+### Injection
+
+A fact the code decides has no place in prose that a person writes: the author copies it, and nothing
+re-checks the copy (`docs/decisions/0011-an-authored-placeholder-pulls-its-content-at-assembly.md`). A
+`<doc-each source="COLLECTION">` on a line of its own asks for that fact, and the one block that follows
+it is the block that repeats. `<doc-each source="observables">` followed by
+`- <doc-value field="name"/> is a <doc-value field="type"/>` becomes one list item per declared
+observable. `<doc-value field="…"/>` marks where a value lands, and a bare `<doc-value/>` takes the item's
+own name where the collection names its items.
+
+The values come from the tree the build already holds, so injection asks nothing new of a plugin. The
+source names one collection: `claims` (the claims that section names), `concepts`, `documents`,
+`observables`, `actions`, or `fixtures`. A field is one of that collection's own: `id`, `subject`,
+`predicate`, `concept`, `text`, `kind`, `referent`, `signature`, `file`, `line` or `channel` on `claims`;
+`name` on `concepts` and `fixtures`; `path`, `audience` or `question` on `documents`; `name` or `type` on
+`observables`; `name`, `calls` or `produces` on `actions`.
+
+The authored file keeps the placeholder, because the engine never writes into a `.spec.md` file. The
+assembled body, the one the brief carries and the section hash covers, is where the values appear, so
+gathered content that changes invalidates the verdicts of every section that pulled it in and the report
+names the element that did it. A source that names no collection, a collection that matches nothing, a
+field the collection does not have, an opener with no block after it, and a `<doc-value>` outside any
+block each stop the build: an empty render in the middle of a paragraph reads as a section that is
+finished. Injected content is not a claim; the fact stays a claim in the sidecar, and the prose that
+depends on it names it with a `<doc-claim>`.
 
 ### Focus
 
@@ -417,12 +459,12 @@ with it into the brief, so the judge reads the result rather than guessing at it
 
 | Task | Input | Output |
 | --- | --- | --- |
-| S1 coverage | One section and the claims it selects | The claims the section does not mention, and the assertions in the section that no claim states |
+| S1 coverage | One section and the claims it names | The claims the section does not mention, and the assertions in the section that no claim states |
 | S2 contradiction | One section and the claims that it mentions | The pair of spans that disagree, with the claim id, or `none` |
 | S3 focus | The whole index | Pairs of document nodes whose audience and question ask the same thing |
 
-S1 runs in both directions because the two directions fail differently. A claim that no section selects is
-dead weight that no reader will meet, and that half is settled by the index without a model. Prose that no
+S1 runs in both directions because the two directions fail differently. A claim that no section names is
+dead weight that no reader will meet, and the build stops on it without a model. Prose that no
 claim states is unverified text, and that half needs the model, because writing a sentence is cheaper than
 writing a claim.
 
@@ -434,8 +476,8 @@ the section that owns it. A verdict that cites a span id the engine never issued
 a soft pass, which matters because the author of the prose and the judge are often the same model family and
 will agree for the same wrong reason.
 
-Cost is bounded before the model is called. Sections and claims are already paired by the selection in the
-index, so the judge reads one section at a time rather than a cross product of the claim graph.
+Cost is bounded before the model is called. Sections and claims are already paired by the references the
+author wrote, so the judge reads one section at a time rather than a cross product of the claim graph.
 
 An earlier draft asked the model whether a scenario would fail if a claim were false, and whether any code
 could contradict a claim. The first is a question about the strength of a test rather than about the
@@ -445,7 +487,7 @@ something. Both were dropped.
 ### Semantic linting
 
 S1 and S2 are two rules from a family, and the family is open. Each rule consists of an id, the object that
-the rule is run over (one claim, one section with the claims it selects, or the whole index), its modality,
+the rule is run over (one claim, one section with the claims it names, or the whole index), its modality,
 and the violation, which is recorded with the span that carries it. A rule returns a verdict and never a
 change to code or to prose, so the rule that the judge proposes nothing holds for every rule in the
 registry.
@@ -461,7 +503,7 @@ other semantic finding reports.
 ### The verdict cache
 
 Semantic rules are the only expensive checks in a build, so a verdict is stored against the inputs that
-produced it: the hash of one section, the hash of the claims it selects, the referent revision, the model
+produced it: the hash of one section, the hash of the claims it names, the referent revision, the model
 id, and the prompt version. The key is per section, so editing one sentence does not re-judge a file. A
 change to any part of the key is a miss, and the rule runs again on the next build, which is what would have
 happened with no cache at all. Caching changes the cost of a build and never its verdict, and a miss is
@@ -523,17 +565,17 @@ about TypeScript or Rust.
 ```ts
 export interface VeridocPlugin {
   handshake(): Promise<{
-    protocolVersion: string;             // "vd/1"
+    protocolVersion: string;             // "veridoc/1"
     name: string;
     version: string;
     languages: string[];
     capabilities: Capability[];          // "collect" | "resolution" | "derivability" | "bivalence" | "execution" | "citation" | "surface"
   }>;
 
-  /** Import index.doc.ts, every *.doc.ts sidecar, and every *.obs.ts, and report what was declared. */
+  /** Read the index, every claim sidecar, and every vocabulary sidecar, and report what was declared. */
   collect(req: { root: string }): Promise<{
     concepts: string[];
-    documents: Array<{ path: string; audience: string; question: string; selects: Selects; notApplicable?: string }>;
+    documents: Array<{ path: string; audience: string; question: string; notApplicable?: string }>;
     claims: RawClaim[];
     observables: Array<{ name: string; type: string }>;
     actions: Array<{ name: string; calls: RefToken; produces: string[] }>;
@@ -589,7 +631,7 @@ A missing capability is reported, never silently treated as a pass. A plugin tha
 engine never issued is a run failure, so the routing is typed rather than hoped for.
 
 The same contract exists in machine-readable form in
-[`vd-1.profile.json`](../vd-1.profile.json): every method with the schema of its request and result, each
+[`veridoc-1.profile.json`](../veridoc-1.profile.json): every method with the schema of its request and result, each
 capability with the sentence above, one loss reason for each way a plugin can go away, and each conformance
 rule with the scripted defect that shows the rule can fail. `prpc-core`, the runner the pluginrpc mechanism
 publishes, reads that file and starts each defect itself, so a rule's `verified` mark is a measurement taken
@@ -608,7 +650,7 @@ fixture.
 | --- | --- |
 | Coverage | Claims in state `supported`, divided by claims on a checkable channel, split by channel, against the configured figure |
 | Custom logic | `satisfies` leaves the plugin did not mark bivalent, divided by leaves |
-| Unmatched prose | Prose that no selected claim states, from S1, as a count |
+| Unmatched prose | Prose that no named claim states, from S1, as a count |
 | Residue | Claims in the residue, as a count and a share |
 | Redundancy | Claims rejected as derivable, as a count |
 | Obligation | Declared tree nodes satisfied, divided by nodes that are not `notApplicable` |

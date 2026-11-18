@@ -48,9 +48,10 @@ enum Commands {
         #[arg(long, default_value = ".")]
         project: PathBuf,
     },
-    /// Print the artefact's current sha256 and nothing else.
+    /// Print the artefact's current sha256 and nothing else. `claim_name` is the name the report
+    /// prints, `<subject>#<predicate>` (`docs/decisions/0009-the-subject-is-named-not-derived-from-a-path.md`).
     Witness {
-        claim_id: String,
+        claim_name: String,
         #[arg(long, default_value = ".")]
         project: PathBuf,
     },
@@ -103,11 +104,16 @@ fn main() -> ! {
 
     let cli = <Cli as clap::Parser>::parse();
     let result = match cli.command {
-        Commands::Check { project, config, force } => {
-            check::run(&project, config.as_deref(), force, &STOP)
-        }
+        Commands::Check {
+            project,
+            config,
+            force,
+        } => check::run(&project, config.as_deref(), force, &STOP),
         Commands::Init { project } => init::run(&project),
-        Commands::Witness { claim_id, project } => witness::run(&project, &claim_id),
+        Commands::Witness {
+            claim_name,
+            project,
+        } => witness::run(&project, &claim_name),
         Commands::ProbePlugin { project } => probe_plugin::run(&project),
         Commands::InstallPlugin {
             git_url,

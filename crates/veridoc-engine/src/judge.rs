@@ -54,7 +54,9 @@ pub struct CommandJudge {
 impl CommandJudge {
     fn ask(&self, task: Task, brief: &Brief) -> Result<Value, JudgeError> {
         if self.command.is_empty() {
-            return Err(JudgeError::Unreachable("judge.command is empty".to_string()));
+            return Err(JudgeError::Unreachable(
+                "judge.command is empty".to_string(),
+            ));
         }
         let request = serde_json::json!({
             "task": task.name(),
@@ -83,7 +85,9 @@ impl CommandJudge {
         if let Err(e) = writeln!(stdin, "{line}").and_then(|()| stdin.flush()) {
             // The judge died before reading its request; the exit status says so below.
             if e.kind() != std::io::ErrorKind::BrokenPipe {
-                return Err(JudgeError::Unreachable(format!("writing the request failed: {e}")));
+                return Err(JudgeError::Unreachable(format!(
+                    "writing the request failed: {e}"
+                )));
             }
         }
         drop(stdin);
@@ -121,7 +125,9 @@ impl CommandJudge {
         let status = child
             .wait()
             .map_err(|e| JudgeError::Unreachable(format!("waiting failed: {e}")))?;
-        let stderr = erx.recv_timeout(Duration::from_millis(500)).unwrap_or_default();
+        let stderr = erx
+            .recv_timeout(Duration::from_millis(500))
+            .unwrap_or_default();
 
         if !status.success() {
             return Err(JudgeError::Unreachable(format!(
@@ -203,7 +209,9 @@ impl AnthropicJudge {
             .json()
             .map_err(|e| JudgeError::BadVerdict(format!("response was not json: {e}")))?;
         if !status.is_success() {
-            return Err(JudgeError::Unreachable(format!("anthropic returned {status}: {body}")));
+            return Err(JudgeError::Unreachable(format!(
+                "anthropic returned {status}: {body}"
+            )));
         }
         let text = body["content"][0]["text"]
             .as_str()

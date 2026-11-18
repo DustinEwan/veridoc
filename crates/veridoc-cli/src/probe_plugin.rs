@@ -80,17 +80,18 @@ pub fn run(project: &Path) -> Result<i32, String> {
 
     println!("claims:");
     for claim in &collect.claims {
-        let id = resolved
-            .resolved
-            .iter()
-            .find(|r| r.reference == claim.subject.key())
-            .map(|r| hash::claim_id(&r.referent_id, &claim.predicate))
-            .unwrap_or_else(|| "c-unresolved".to_string());
-        println!("  {id}  {:?}  {}:{}  {}", claim.kind, claim.file, claim.line, claim.text);
+        let id = hash::claim_name(claim.subject.subject_name(), &claim.predicate);
+        println!(
+            "  {id}  {:?}  {}:{}  {}",
+            claim.kind, claim.file, claim.line, claim.text
+        );
     }
     println!("referents:");
     for reference in &resolved.resolved {
-        println!("  {}  {}  {}", reference.referent_id, reference.signature, reference.reference);
+        println!(
+            "  {}  {}  {}",
+            reference.referent_id, reference.signature, reference.reference
+        );
     }
     for gap in &resolved.unresolved {
         println!("  unresolved  {}  {}", gap.reference, gap.reason);

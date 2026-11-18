@@ -68,10 +68,14 @@ fn quoted(line: &str) -> Vec<String> {
 }
 
 pub fn check_spec(spec: &Path) -> Result<(), String> {
-    let text = std::fs::read_to_string(spec)
-        .map_err(|e| format!("read {}: {e}", spec.display()))?;
-    let block = extract_interface(&text)
-        .ok_or_else(|| format!("no `export interface VeridocPlugin {{` block found in {}", spec.display()))?;
+    let text =
+        std::fs::read_to_string(spec).map_err(|e| format!("read {}: {e}", spec.display()))?;
+    let block = extract_interface(&text).ok_or_else(|| {
+        format!(
+            "no `export interface VeridocPlugin {{` block found in {}",
+            spec.display()
+        )
+    })?;
 
     let mut problems = Vec::new();
 

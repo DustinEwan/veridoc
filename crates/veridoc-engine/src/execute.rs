@@ -4,12 +4,12 @@
 
 use std::time::Duration;
 
+use crate::bind::{BoundChannel, BoundClaim};
 use serde_json::Value;
 use veridoc_protocol::{
     Asserts, Call, Check, LeafAnswer, Loss, RunFailure, RunFailureKind, RunLeaf, RunRequest,
     RunResponse, Timeouts,
 };
-use crate::bind::{BoundChannel, BoundClaim};
 
 /// The two readings a contradiction cannot separate (`docs/spec.md:362-366`). Both travel
 /// with every contradicted claim; a person or an agent chooses between them.
@@ -180,14 +180,28 @@ fn evaluate(
         Asserts::All { all } => {
             let mut holds = true;
             for child in all {
-                holds &= evaluate(child, claim_id, observed, satisfied, next_leaf, missing_leaf);
+                holds &= evaluate(
+                    child,
+                    claim_id,
+                    observed,
+                    satisfied,
+                    next_leaf,
+                    missing_leaf,
+                );
             }
             holds
         }
         Asserts::Any { any } => {
             let mut holds = false;
             for child in any {
-                holds |= evaluate(child, claim_id, observed, satisfied, next_leaf, missing_leaf);
+                holds |= evaluate(
+                    child,
+                    claim_id,
+                    observed,
+                    satisfied,
+                    next_leaf,
+                    missing_leaf,
+                );
             }
             holds
         }

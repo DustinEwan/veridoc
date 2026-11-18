@@ -179,8 +179,8 @@ impl PluginClient {
             // verdict every other method gets for an answer the host cannot read, and it carries
             // what was wrong. `UnsupportedVersion` is the wrong home for it: that variant asserts
             // a revision this engine does not speak, and here the declared string is one it does
-            // speak, so the report would read "plugin reported protocol "vd/1"; this engine speaks
-            // "vd/1"" and send an operator looking for a version mismatch that is not the problem.
+            // speak, so the report would read "plugin reported protocol "veridoc/1"; this engine speaks
+            // "veridoc/1"" and send an operator looking for a version mismatch that is not the problem.
             Err(e) => {
                 return Err(ConnectError::Lost(Loss::Profile {
                     reason: UNUSABLE_RESULT.to_string(),

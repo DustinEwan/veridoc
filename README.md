@@ -2,7 +2,7 @@
 
 veridoc is a documentation checker for projects where an agent writes the documentation. You declare the
 documents your project owes, you write one claim per assertion in a sidecar beside your code, and you write
-the prose yourself in sections that select those claims. veridoc then evaluates every claim through the one
+the prose yourself in sections that name those claims. veridoc then evaluates every claim through the one
 channel it declares: a scenario whose assertion can fail, a recorded artefact, or a judge that compares your
 prose with claims that already passed.
 
@@ -32,7 +32,7 @@ about what may go into it produces the same slop in a new file extension.
 | Path | What it holds |
 | --- | --- |
 | [`docs/spec.md`](docs/spec.md) | The v1 specification: objects, rules, the two artifact stages, the plugin boundary, the report. |
-| [`vd-1.profile.json`](vd-1.profile.json) | The plugin contract in machine-readable form: every method with the schema of its request and result, what each absent capability costs, what every loss reason becomes, and each conformance rule with the scripted defect that shows it can fail. `prpc-core` from the pluginrpc mechanism reads it and runs the defects; nothing of this repository sits between the plugin and the wire report. |
+| [`veridoc-1.profile.json`](veridoc-1.profile.json) | The plugin contract in machine-readable form: every method with the schema of its request and result, what each absent capability costs, what every loss reason becomes, and each conformance rule with the scripted defect that shows it can fail. `prpc-core` from the pluginrpc mechanism reads it and runs the defects; nothing of this repository sits between the plugin and the wire report. |
 | [`docs/decisions/`](docs/decisions/) | Five dated records for the load-bearing choices. |
 
 ## Status

@@ -10,7 +10,10 @@ use veridoc_engine::judge::{CommandJudge, Judge, JudgeError};
 use veridoc_engine::verdicts;
 
 fn tmp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("vd-engine-judge-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "veridoc-engine-judge-{}-{name}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir.canonicalize().unwrap()
@@ -20,11 +23,15 @@ fn tmp_dir(name: &str) -> PathBuf {
 fn scripted(root: &Path, file: &str, verdict_json: &str) -> CommandJudge {
     std::fs::write(root.join(file), verdict_json).unwrap();
     CommandJudge {
-        command: vec!["sh".into(), "-c".into(), format!("cat {}", root.join(file).display())],
+        command: vec![
+            "sh".into(),
+            "-c".into(),
+            format!("cat {}", root.join(file).display()),
+        ],
         cwd: None,
         env: Vec::new(),
         model: Some("scripted".into()),
-        prompt_version: "vd-prompt-1".into(),
+        prompt_version: "veridoc-prompt-1".into(),
         timeout: Duration::from_secs(10),
     }
 }
@@ -37,9 +44,18 @@ fn brief_with_spans(root: &Path) -> Brief {
         audience: Some("an author".into()),
         question: Some("What is refused?".into()),
         spans: vec![
-            BriefSpan { id: "sp1".into(), text: "The scanner walks upward.".into() },
-            BriefSpan { id: "sp2".into(), text: "It stops at the first root.".into() },
-            BriefSpan { id: "sp3".into(), text: "Nothing else is consulted.".into() },
+            BriefSpan {
+                id: "sp1".into(),
+                text: "The scanner walks upward.".into(),
+            },
+            BriefSpan {
+                id: "sp2".into(),
+                text: "It stops at the first root.".into(),
+            },
+            BriefSpan {
+                id: "sp3".into(),
+                text: "Nothing else is consulted.".into(),
+            },
         ],
         claims: vec![],
         nodes: vec![],
@@ -76,8 +92,12 @@ fn a_verdict_citing_only_issued_ids_is_kept() {
     );
     let brief = brief_with_spans(&root);
     let verdict = judge.s1(&brief).expect("the judge answers");
-    verdicts::verify_ids(Task::S1, &serde_json::to_value(&verdict).unwrap(), &brief.issued_ids())
-        .expect("every cited id was issued");
+    verdicts::verify_ids(
+        Task::S1,
+        &serde_json::to_value(&verdict).unwrap(),
+        &brief.issued_ids(),
+    )
+    .expect("every cited id was issued");
 }
 
 #[test]
@@ -88,7 +108,7 @@ fn a_nonzero_exit_is_unreachable_with_the_child_stderr() {
         cwd: None,
         env: Vec::new(),
         model: None,
-        prompt_version: "vd-prompt-1".into(),
+        prompt_version: "veridoc-prompt-1".into(),
         timeout: Duration::from_secs(10),
     };
     let err = judge.s1(&brief_with_spans(&root)).expect_err("exit 3");
@@ -117,10 +137,12 @@ fn a_silent_judge_times_out() {
         cwd: None,
         env: Vec::new(),
         model: None,
-        prompt_version: "vd-prompt-1".into(),
+        prompt_version: "veridoc-prompt-1".into(),
         timeout: Duration::from_millis(200),
     };
-    let err = judge.s1(&brief_with_spans(&root)).expect_err("sleeps past the deadline");
+    let err = judge
+        .s1(&brief_with_spans(&root))
+        .expect_err("sleeps past the deadline");
     assert!(matches!(err, JudgeError::Timeout), "got {err:?}");
 }
 
@@ -135,10 +157,13 @@ fn the_request_carries_task_prompt_brief_version_and_model() {
     )
     .unwrap();
     let judge = CommandJudge {
-        command: vec!["sh".into(), root.join("echo.sh").to_string_lossy().into_owned()],
+        command: vec![
+            "sh".into(),
+            root.join("echo.sh").to_string_lossy().into_owned(),
+        ],
         cwd: None,
         env: Vec::new(),
-        prompt_version: "vd-prompt-9".into(),
+        prompt_version: "veridoc-prompt-9".into(),
         model: Some("scripted".into()),
         timeout: Duration::from_secs(10),
     };
@@ -146,8 +171,14 @@ fn the_request_carries_task_prompt_brief_version_and_model() {
     let request: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(root.join("request.json")).unwrap()).unwrap();
     assert_eq!(request["task"], "s1");
-    assert!(request["prompt"].as_str().unwrap().contains("S1 coverage judge"));
-    assert!(request["brief"].as_str().unwrap().contains("sp1: The scanner walks upward."));
-    assert_eq!(request["promptVersion"], "vd-prompt-9");
+    assert!(request["prompt"]
+        .as_str()
+        .unwrap()
+        .contains("S1 coverage judge"));
+    assert!(request["brief"]
+        .as_str()
+        .unwrap()
+        .contains("sp1: The scanner walks upward."));
+    assert_eq!(request["promptVersion"], "veridoc-prompt-9");
     assert_eq!(request["model"], "scripted");
 }

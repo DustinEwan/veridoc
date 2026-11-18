@@ -42,8 +42,6 @@ pub struct ClaimWire {
     pub predicate: String,
     pub text: String,
     pub channel: ChannelWire,
-    #[serde(default)]
-    pub supports: Vec<String>,
     pub file: String,
     pub line: u32,
 }
@@ -98,12 +96,12 @@ pub enum BindError {
         line: u32,
         claim_id: String,
     },
-    #[error("claim {predicate} duplicates {existing_id}, owned by {owner_file}:{owner_line}")]
+    #[error("claim {predicate} duplicates {existing_name}, owned by {owner_file}:{owner_line}")]
     Duplicate {
         file: String,
         line: u32,
         predicate: String,
-        existing_id: String,
+        existing_name: String,
         owner_file: String,
         owner_line: u32,
     },
@@ -158,15 +156,92 @@ pub enum BindError {
     #[error("scenario has no @id:<slug> tag")]
     ScenarioTag { file: String, line: u32 },
     #[error("scenario step is not allowed: {text}; a scenario has one Given and one When, and the claim owns the assertion")]
-    ForbiddenStep { file: String, line: u32, text: String },
+    ForbiddenStep {
+        file: String,
+        line: u32,
+        text: String,
+    },
     #[error("unrecognized line in feature file: {text}")]
-    Unrecognized { file: String, line: u32, text: String },
+    Unrecognized {
+        file: String,
+        line: u32,
+        text: String,
+    },
     #[error("empty {what}")]
-    EmptyStep { file: String, line: u32, what: String },
-    #[error("section has no id; add {{#id}}")]
-    SectionId { file: String, line: u32 },
-    #[error("section id {anchor} is declared twice")]
-    DuplicateAnchor { file: String, line: u32, anchor: String },
+    EmptyStep {
+        file: String,
+        line: u32,
+        what: String,
+    },
+    #[error("section opens with no subject; write <doc-section name=\"<subject>\">")]
+    SubjectName { file: String, line: u32 },
+    #[error("unknown element <{element}>; the grammar defines doc-section, doc-claim, doc-each and doc-value")]
+    UnknownElement {
+        file: String,
+        line: u32,
+        element: String,
+    },
+    #[error("<{element}> must sit on a line of its own")]
+    MisplacedElement {
+        file: String,
+        line: u32,
+        element: String,
+    },
+    #[error("reference {subject}#{predicate} names no claim")]
+    UnknownReference {
+        file: String,
+        line: u32,
+        subject: String,
+        predicate: String,
+    },
+    #[error(
+        "{subject}#{predicate} matches {count} claims; name one by its suffixed id: {candidates}"
+    )]
+    AmbiguousReference {
+        file: String,
+        line: u32,
+        subject: String,
+        predicate: String,
+        count: usize,
+        candidates: String,
+    },
+    #[error("claim {claim_id} is named by no section")]
+    UnnamedClaim {
+        file: String,
+        line: u32,
+        claim_id: String,
+    },
+    #[error("doc-each names no source; the collections are claims, concepts, documents, observables, actions, fixtures")]
+    MissingSource { file: String, line: u32 },
+    #[error("doc-each has no block after it to repeat")]
+    MissingBlock { file: String, line: u32 },
+    #[error("doc-value sits outside a doc-each block, where no value can land")]
+    ValueOutsideEach { file: String, line: u32 },
+    #[error("doc-each source {collection} names no collection")]
+    UnknownSource {
+        file: String,
+        line: u32,
+        collection: String,
+    },
+    #[error("doc-each source {collection} matched nothing")]
+    EmptySource {
+        file: String,
+        line: u32,
+        collection: String,
+    },
+    #[error("doc-each source {collection} has no field {field}")]
+    UnknownField {
+        file: String,
+        line: u32,
+        collection: String,
+        field: String,
+    },
+    #[error("<doc-value> in doc-each source {collection} names no field, and {collection} items carry no name to default to")]
+    MissingField {
+        file: String,
+        line: u32,
+        collection: String,
+    },
     #[error("no document node in index.doc.ts declares this file")]
     UndeclaredSpec { file: String, line: u32 },
     #[error("declared node is neither satisfied nor notApplicable with a reason")]
@@ -176,13 +251,6 @@ pub enum BindError {
         file: String,
         line: u32,
         store: String,
-    },
-    #[error("claim {claim_id} supports {section}, which does not exist")]
-    SupportsMissing {
-        file: String,
-        line: u32,
-        claim_id: String,
-        section: String,
     },
     #[error("claim {claim_id} has an assertion node with neither obs nor all/any/not at {path}")]
     BadNode {
@@ -220,7 +288,9 @@ pub enum BindError {
         name: String,
         capability: String,
     },
-    #[error("claim {claim_id} cannot take the citation channel: plugin \"{name}\" declares no citation")]
+    #[error(
+        "claim {claim_id} cannot take the citation channel: plugin \"{name}\" declares no citation"
+    )]
     CitationCapability {
         file: String,
         line: u32,
@@ -269,12 +339,22 @@ impl BindError {
             | BindError::ForbiddenStep { file, line, .. }
             | BindError::Unrecognized { file, line, .. }
             | BindError::EmptyStep { file, line, .. }
-            | BindError::SectionId { file, line }
-            | BindError::DuplicateAnchor { file, line, .. }
+            | BindError::SubjectName { file, line }
+            | BindError::UnknownElement { file, line, .. }
+            | BindError::MisplacedElement { file, line, .. }
+            | BindError::MissingSource { file, line }
+            | BindError::MissingBlock { file, line }
+            | BindError::ValueOutsideEach { file, line }
+            | BindError::UnknownSource { file, line, .. }
+            | BindError::EmptySource { file, line, .. }
+            | BindError::UnknownField { file, line, .. }
+            | BindError::MissingField { file, line, .. }
+            | BindError::UnknownReference { file, line, .. }
+            | BindError::AmbiguousReference { file, line, .. }
+            | BindError::UnnamedClaim { file, line, .. }
             | BindError::UndeclaredSpec { file, line }
             | BindError::UnsatisfiedNode { file, line }
             | BindError::UndeclaredStore { file, line, .. }
-            | BindError::SupportsMissing { file, line, .. }
             | BindError::BadNode { file, line, .. }
             | BindError::EmptyNode { file, line, .. }
             | BindError::ContainsType { file, line, .. }
@@ -313,7 +393,9 @@ pub struct BoundClaim {
     pub text: String,
     pub file: String,
     pub line: u32,
-    pub supports: Vec<String>,
+    /// The author's name for the subject: the left half of `id`. The referent id below is a
+    /// reporting value and moves when a file is renamed; this does not.
+    pub subject: String,
     pub referent_id: String,
     pub signature: String,
     pub channel: BoundChannel,
@@ -345,13 +427,25 @@ pub enum BoundChannel {
 #[derive(Debug, Clone)]
 pub struct BoundSection {
     pub file: String,
-    pub anchor: String,
-    pub heading: String,
+    /// The subject the section's prose is about, from `<doc-section name="…">`.
+    pub subject: String,
     pub line: u32,
     pub spans: Vec<spec_md::Span>,
     pub body: String,
-    /// The claim ids the section selects, in claim order.
-    pub selects: Vec<String>,
+    /// The claim ids the section names, in claim order, each resolved from a `<doc-claim>`.
+    pub claims: Vec<String>,
+    /// What each `<doc-each>` in the section pulled in, in document order. Empty when the section
+    /// declares no placeholder.
+    pub injections: Vec<Injected>,
+}
+
+/// What one `<doc-each>` pulled in, as the report names it: the element's source and how many
+/// values it resolved to. A section whose injected content changed is re-run with no prose diff,
+/// and this is the line that tells the reader which element did it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Injected {
+    pub source: String,
+    pub items: usize,
 }
 
 /// The whole bound project: what every later stage reads.
@@ -442,10 +536,9 @@ pub fn bind(
         let (referent_id, signature) = match referents.get(&subject_key) {
             Some(pair) => pair.clone(),
             None => {
-                let reason = unresolved
-                    .get(&subject_key)
-                    .cloned()
-                    .unwrap_or_else(|| "the plugin answered neither resolved nor unresolved".to_string());
+                let reason = unresolved.get(&subject_key).cloned().unwrap_or_else(|| {
+                    "the plugin answered neither resolved nor unresolved".to_string()
+                });
                 errors.push(BindError::Unresolved {
                     file: claim.file.clone(),
                     line: claim.line,
@@ -455,19 +548,23 @@ pub fn bind(
                 continue;
             }
         };
-        let id = hash::claim_id(&referent_id, &claim.predicate);
-        if let Some((owner_file, owner_line)) = owners.get(&id) {
+        // The identity is what a duplicate is judged on; the name is what every surface prints.
+        // Both take the author's subject name, not the resolved referent id (`0009`).
+        let subject = claim.subject.subject_name().to_string();
+        let identity = hash::claim_identity(&subject, &claim.predicate);
+        let id = hash::claim_name(&subject, &claim.predicate);
+        if let Some((owner_file, owner_line)) = owners.get(&identity) {
             errors.push(BindError::Duplicate {
                 file: claim.file.clone(),
                 line: claim.line,
                 predicate: claim.predicate.clone(),
-                existing_id: id,
+                existing_name: id,
                 owner_file: owner_file.clone(),
                 owner_line: *owner_line,
             });
             continue;
         }
-        owners.insert(id.clone(), (claim.file.clone(), claim.line));
+        owners.insert(identity, (claim.file.clone(), claim.line));
 
         // Channel completeness: exactly one channel.
         let wire = &claim.channel;
@@ -501,12 +598,17 @@ pub fn bind(
                 });
                 continue;
             };
-            let asserts =
-                match validate_asserts(&asserts_value, "", &id, &claim.file, claim.line, &mut errors)
-                {
-                    Some(a) => a,
-                    None => continue,
-                };
+            let asserts = match validate_asserts(
+                &asserts_value,
+                "",
+                &id,
+                &claim.file,
+                claim.line,
+                &mut errors,
+            ) {
+                Some(a) => a,
+                None => continue,
+            };
             // The bivalence and execution capabilities gate the scenario channel.
             if !capabilities.contains(&Capability::Bivalence) {
                 errors.push(BindError::CapabilityMissing {
@@ -551,7 +653,10 @@ pub fn bind(
                 });
                 continue;
             };
-            let Some(fixture) = collect.fixtures.iter().find(|f| given.text.contains(f.as_str()))
+            let Some(fixture) = collect
+                .fixtures
+                .iter()
+                .find(|f| given.text.contains(f.as_str()))
             else {
                 errors.push(BindError::UndeclaredFixture {
                     file: scenario_file.clone(),
@@ -582,10 +687,9 @@ pub fn bind(
             let action_referent = match referents.get(&action_key) {
                 Some((id, _)) => id.clone(),
                 None => {
-                    let reason = unresolved
-                        .get(&action_key)
-                        .cloned()
-                        .unwrap_or_else(|| "the plugin answered neither resolved nor unresolved".to_string());
+                    let reason = unresolved.get(&action_key).cloned().unwrap_or_else(|| {
+                        "the plugin answered neither resolved nor unresolved".to_string()
+                    });
                     errors.push(BindError::Unresolved {
                         file: claim.file.clone(),
                         line: claim.line,
@@ -698,52 +802,11 @@ pub fn bind(
             text: claim.text.clone(),
             file: claim.file.clone(),
             line: claim.line,
-            supports: claim.supports.clone(),
+            subject,
             referent_id,
             signature,
             channel,
         });
-    }
-
-    // `supports` links: every target must be a declared file with that section id.
-    let anchors: BTreeMap<String, Vec<String>> = spec_files
-        .iter()
-        .map(|(path, parsed)| {
-            (
-                path.clone(),
-                parsed
-                    .sections
-                    .iter()
-                    .map(|s| s.anchor.clone())
-                    .filter(|a| !a.is_empty())
-                    .collect(),
-            )
-        })
-        .collect();
-    for claim in &bound {
-        for section in &claim.supports {
-            let (file, anchor) = match section.split_once('#') {
-                Some((f, a)) => (f, a),
-                None => {
-                    errors.push(BindError::SupportsMissing {
-                        file: claim.file.clone(),
-                        line: claim.line,
-                        claim_id: claim.id.clone(),
-                        section: section.clone(),
-                    });
-                    continue;
-                }
-            };
-            let known = anchors.get(file).is_some_and(|a| a.iter().any(|x| x == anchor));
-            if !known {
-                errors.push(BindError::SupportsMissing {
-                    file: claim.file.clone(),
-                    line: claim.line,
-                    claim_id: claim.id.clone(),
-                    section: section.clone(),
-                });
-            }
-        }
     }
 
     // The tree, closed both ways.
@@ -770,52 +833,190 @@ pub fn bind(
         }
     }
 
-    // Selection: resolve each section's selection to a claim set.
+    // Two predicates can slug alike. The identity suffix separates them before a document names
+    // a claim, so the author and the engine agree on one spelling (`docs/spec.md:152-158`).
+    let base_ids: Vec<String> = bound.iter().map(|claim| claim.id.clone()).collect();
+    {
+        let mut by_name: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        for (i, claim) in bound.iter().enumerate() {
+            by_name.entry(claim.id.as_str()).or_default().push(i);
+        }
+        let suffixed: Vec<(usize, String)> = by_name
+            .values()
+            .filter(|indexes| indexes.len() > 1)
+            .flat_map(|indexes| {
+                indexes.iter().map(|&i| {
+                    let claim = &bound[i];
+                    let identity = hash::claim_identity(&claim.subject, &claim.predicate);
+                    (i, format!("{}{}", claim.id, hash::suffix(&identity)))
+                })
+            })
+            .collect();
+        drop(by_name);
+        for (i, name) in suffixed {
+            bound[i].id = name;
+        }
+    }
+
+    // Coverage, both directions: every `<doc-claim>` names one claim, and every claim is named
+    // by at least one section. A reference that names nothing is prose describing a check that
+    // does not exist, and a claim no section names is a check no reader will ever meet, so both
+    // stop the build (`docs/decisions/0010-a-claim-reference-names-the-claim.md`).
+    // Both spellings resolve: the bare `subject#predicate` the author writes, and the suffixed
+    // id a collided slug forces them to fall back to.
+    let mut by_name: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, id) in base_ids.iter().enumerate() {
+        by_name.entry(id.as_str()).or_default().push(index);
+        if bound[index].id != *id {
+            by_name
+                .entry(bound[index].id.as_str())
+                .or_default()
+                .push(index);
+        }
+    }
     let mut sections: Vec<BoundSection> = Vec::new();
     for (path, parsed) in &spec_files {
         for section in &parsed.sections {
-            if section.anchor.is_empty() {
-                continue;
-            }
-            let mut selected: Vec<String> = Vec::new();
-            for claim in &bound {
-                let matches = section_selects(section, claim);
-                let explicit = section.claims.iter().any(|c| c == &claim.id);
-                if matches || explicit {
-                    selected.push(claim.id.clone());
+            let mut named: Vec<String> = Vec::new();
+            if !section.subject.is_empty() {
+                for reference in &section.references {
+                    let key = format!("{}#{}", section.subject, reference.predicate);
+                    match by_name.get(key.as_str()) {
+                        None => errors.push(BindError::UnknownReference {
+                            file: path.clone(),
+                            line: reference.line,
+                            subject: section.subject.clone(),
+                            predicate: reference.predicate.clone(),
+                        }),
+                        Some(indexes) if indexes.len() > 1 => {
+                            let candidates = indexes
+                                .iter()
+                                .map(|&i| bound[i].id.clone())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            errors.push(BindError::AmbiguousReference {
+                                file: path.clone(),
+                                line: reference.line,
+                                subject: section.subject.clone(),
+                                predicate: reference.predicate.clone(),
+                                count: indexes.len(),
+                                candidates,
+                            });
+                        }
+                        Some(indexes) => {
+                            let id = bound[indexes[0]].id.clone();
+                            if !named.contains(&id) {
+                                named.push(id);
+                            }
+                        }
+                    }
                 }
-            }
-            if selected.is_empty() {
-                warnings.push(Warning {
-                    file: Some(path.clone()),
-                    line: Some(section.line),
-                    message: format!(
-                        "section {path}#{} selects no claim",
-                        section.anchor
-                    ),
-                });
             }
             sections.push(BoundSection {
                 file: path.clone(),
-                anchor: section.anchor.clone(),
-                heading: section.heading.clone(),
+                subject: section.subject.clone(),
                 line: section.line,
                 spans: section.spans.clone(),
                 body: section.body.clone(),
-                selects: selected,
+                claims: named,
+                injections: Vec::new(),
             });
         }
     }
     sections.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
 
-    // A claim no section selects is dead weight that no reader will meet; the index settles
-    // that half without a model.
+    // Assembly: a `<doc-each>` and its block become one copy of the block per value the source
+    // names, so the body every later stage hashes, briefs, and cites is the assembled one.
+    // Injected content therefore invalidates the verdicts of the section that pulled it in, which
+    // is the reason to co-locate the prose with the code at all
+    // (`docs/decisions/0011-an-authored-placeholder-pulls-its-content-at-assembly.md`).
+    for section in &mut sections {
+        let authored = spec_files
+            .get(&section.file)
+            .and_then(|parsed| parsed.sections.iter().find(|s| s.line == section.line));
+        let Some(authored) = authored else { continue };
+        if authored.injections.is_empty() {
+            continue;
+        }
+        let mut body = section.body.clone();
+        let mut pulled: Vec<Injected> = Vec::new();
+        // Reverse order, so replacing one range leaves the offsets of the ones before it alone.
+        for injection in authored.injections.iter().rev() {
+            let Some(source) = Source::named(&injection.source, &bound, section, &collect) else {
+                errors.push(BindError::UnknownSource {
+                    file: section.file.clone(),
+                    line: injection.line,
+                    collection: injection.source.clone(),
+                });
+                continue;
+            };
+            if source.len() == 0 {
+                errors.push(BindError::EmptySource {
+                    file: section.file.clone(),
+                    line: injection.line,
+                    collection: injection.source.clone(),
+                });
+                continue;
+            }
+            let default = source.default_field();
+            let mut fields_ok = true;
+            for field in &injection.fields {
+                let named = match (field, default) {
+                    (Some(field), _) => field.clone(),
+                    (None, Some(field)) => field.to_string(),
+                    (None, None) => {
+                        errors.push(BindError::MissingField {
+                            file: section.file.clone(),
+                            line: injection.line,
+                            collection: injection.source.clone(),
+                        });
+                        fields_ok = false;
+                        break;
+                    }
+                };
+                if source.field(0, &named).is_none() {
+                    errors.push(BindError::UnknownField {
+                        file: section.file.clone(),
+                        line: injection.line,
+                        collection: injection.source.clone(),
+                        field: named,
+                    });
+                    fields_ok = false;
+                }
+            }
+            if !fields_ok {
+                continue;
+            }
+            let rendered: Vec<String> = (0..source.len())
+                .map(|item| {
+                    spec_md::substitute(&injection.block, &|field| {
+                        let named = if field.is_empty() {
+                            default.unwrap_or_default()
+                        } else {
+                            field
+                        };
+                        source.field(item, named).unwrap_or_default()
+                    })
+                })
+                .collect();
+            body.replace_range(injection.start..injection.end, &rendered.join("\n"));
+            pulled.push(Injected {
+                source: injection.source.clone(),
+                items: source.len(),
+            });
+        }
+        pulled.reverse();
+        section.body = body;
+        section.spans = spec_md::assign_spans(&section.body);
+        section.injections = pulled;
+    }
+
     for claim in &bound {
-        if !sections.iter().any(|s| s.selects.contains(&claim.id)) {
-            warnings.push(Warning {
-                file: Some(claim.file.clone()),
-                line: Some(claim.line),
-                message: format!("claim {} is selected by no section", claim.id),
+        if !sections.iter().any(|s| s.claims.contains(&claim.id)) {
+            errors.push(BindError::UnnamedClaim {
+                file: claim.file.clone(),
+                line: claim.line,
+                claim_id: claim.id.clone(),
             });
         }
     }
@@ -833,26 +1034,6 @@ pub fn bind(
         fixtures: collect.fixtures.clone(),
         warnings,
     })
-}
-
-fn section_selects(section: &spec_md::Section, claim: &BoundClaim) -> bool {
-    let s = &section.selects;
-    if s.is_empty() {
-        return false;
-    }
-    if s.concept.as_deref().is_some_and(|c| c != claim.concept) {
-        return false;
-    }
-    if s.kind
-        .as_ref()
-        .is_some_and(|k| !k.contains(&claim.kind))
-    {
-        return false;
-    }
-    if s.referent.as_deref().is_some_and(|r| r != claim.referent_id) {
-        return false;
-    }
-    true
 }
 
 /// Validate one assertion node. `path` names the node inside the tree for the error message.
@@ -888,7 +1069,14 @@ fn validate_asserts(
                     } else {
                         format!("{path}.all[{i}]")
                     };
-                    out.push(validate_asserts(item, &child_path, claim_id, file, line, errors)?);
+                    out.push(validate_asserts(
+                        item,
+                        &child_path,
+                        claim_id,
+                        file,
+                        line,
+                        errors,
+                    )?);
                 }
                 Some(Asserts::All { all: out })
             }
@@ -917,7 +1105,14 @@ fn validate_asserts(
                     } else {
                         format!("{path}.any[{i}]")
                     };
-                    out.push(validate_asserts(item, &child_path, claim_id, file, line, errors)?);
+                    out.push(validate_asserts(
+                        item,
+                        &child_path,
+                        claim_id,
+                        file,
+                        line,
+                        errors,
+                    )?);
                 }
                 Some(Asserts::Any { any: out })
             }
@@ -950,7 +1145,8 @@ fn validate_asserts(
             "equals" => Check::Equals(is["equals"].clone()),
             "contains" => Check::Contains(is["contains"].clone()),
             "satisfies" => {
-                let Ok(spec) = serde_json::from_value::<SatisfiesSpec>(is["satisfies"].clone()) else {
+                let Ok(spec) = serde_json::from_value::<SatisfiesSpec>(is["satisfies"].clone())
+                else {
                     errors.push(bad_node(claim_id, file, line, path));
                     return None;
                 };
@@ -1013,7 +1209,10 @@ fn escapes_root(root: &Path, path: &str) -> bool {
             other => normalized.push(other),
         }
     }
-    !normalized.into_iter().collect::<PathBuf>().starts_with(root)
+    !normalized
+        .into_iter()
+        .collect::<PathBuf>()
+        .starts_with(root)
 }
 
 fn load_features(root: &Path, errors: &mut Vec<BindError>) -> Vec<FeatureFile> {
@@ -1089,19 +1288,40 @@ fn load_spec_files(
         let (parsed, problems) = spec_md::parse(&rel, &text);
         for problem in problems {
             match problem.kind {
-                SpecProblemKind::MissingId => errors.push(BindError::SectionId {
+                SpecProblemKind::MissingSubjectName => errors.push(BindError::SubjectName {
                     file: problem.file,
                     line: problem.line,
                 }),
-                SpecProblemKind::DuplicateId(anchor) => errors.push(BindError::DuplicateAnchor {
-                    file: problem.file.clone(),
+                SpecProblemKind::UnknownElement(element) => {
+                    errors.push(BindError::UnknownElement {
+                        file: problem.file,
+                        line: problem.line,
+                        element,
+                    })
+                }
+                SpecProblemKind::MisplacedElement(element) => {
+                    errors.push(BindError::MisplacedElement {
+                        file: problem.file,
+                        line: problem.line,
+                        element,
+                    })
+                }
+                SpecProblemKind::MissingSource => errors.push(BindError::MissingSource {
+                    file: problem.file,
                     line: problem.line,
-                    anchor,
                 }),
-                SpecProblemKind::NoSelection => warnings.push(Warning {
+                SpecProblemKind::MissingBlock => errors.push(BindError::MissingBlock {
+                    file: problem.file,
+                    line: problem.line,
+                }),
+                SpecProblemKind::ValueOutsideEach => errors.push(BindError::ValueOutsideEach {
+                    file: problem.file,
+                    line: problem.line,
+                }),
+                SpecProblemKind::NoReferences => warnings.push(Warning {
                     file: Some(problem.file.clone()),
                     line: Some(problem.line),
-                    message: "the heading declares neither selects nor claims".to_string(),
+                    message: "the section names no claim".to_string(),
                 }),
             }
         }
@@ -1134,4 +1354,128 @@ pub fn relative(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+/// What a `<doc-each source="…">` gathers: one of the collections the bound tree already holds,
+/// so injection asks nothing new of a plugin and needs no include mechanism
+/// (`docs/decisions/0011-an-authored-placeholder-pulls-its-content-at-assembly.md`). This set is
+/// the whole vocabulary, and a source naming anything else is an error rather than an empty render.
+enum Source<'a> {
+    Claims(Vec<&'a BoundClaim>),
+    Concepts(&'a [String]),
+    Documents(&'a [DocumentDecl]),
+    Observables(&'a [ObservableDecl]),
+    Actions(&'a [ActionDecl]),
+    Fixtures(&'a [String]),
+}
+
+impl<'a> Source<'a> {
+    /// The collection a source names, resolved against the tree. `claims` is the section's own
+    /// claims, because a section's prose is about them; every other collection is the project's.
+    fn named(
+        source: &str,
+        bound: &'a [BoundClaim],
+        section: &BoundSection,
+        collect: &'a CollectWire,
+    ) -> Option<Self> {
+        match source {
+            "claims" => Some(Source::Claims(
+                section
+                    .claims
+                    .iter()
+                    .filter_map(|id| bound.iter().find(|claim| &claim.id == id))
+                    .collect(),
+            )),
+            "concepts" => Some(Source::Concepts(&collect.concepts)),
+            "documents" => Some(Source::Documents(&collect.documents)),
+            "observables" => Some(Source::Observables(&collect.observables)),
+            "actions" => Some(Source::Actions(&collect.actions)),
+            "fixtures" => Some(Source::Fixtures(&collect.fixtures)),
+            _ => None,
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Source::Claims(items) => items.len(),
+            Source::Concepts(items) => items.len(),
+            Source::Documents(items) => items.len(),
+            Source::Observables(items) => items.len(),
+            Source::Actions(items) => items.len(),
+            Source::Fixtures(items) => items.len(),
+        }
+    }
+
+    /// The value of one field of one item. `None` is a field this collection does not have, which
+    /// is an error the author sees before any document is written.
+    fn field(&self, item: usize, field: &str) -> Option<String> {
+        match self {
+            Source::Claims(claims) => {
+                let claim = *claims.get(item)?;
+                Some(match field {
+                    "id" => claim.id.clone(),
+                    "subject" => claim.subject.clone(),
+                    "predicate" => claim.predicate.clone(),
+                    "concept" => claim.concept.clone(),
+                    "text" => claim.text.clone(),
+                    "kind" => serde_json::to_value(claim.kind).ok()?.as_str()?.to_string(),
+                    "referent" => claim.referent_id.clone(),
+                    "signature" => claim.signature.clone(),
+                    "file" => claim.file.clone(),
+                    "line" => claim.line.to_string(),
+                    "channel" => channel_name(&claim.channel).to_string(),
+                    _ => return None,
+                })
+            }
+            Source::Concepts(names) | Source::Fixtures(names) => match field {
+                "name" => names.get(item).cloned(),
+                _ => None,
+            },
+            Source::Documents(documents) => {
+                let document = documents.get(item)?;
+                Some(match field {
+                    "path" => document.path.clone(),
+                    "audience" => document.audience.clone(),
+                    "question" => document.question.clone(),
+                    _ => return None,
+                })
+            }
+            Source::Observables(observables) => {
+                let observable = observables.get(item)?;
+                Some(match field {
+                    "name" => observable.name.clone(),
+                    "type" => observable.ty.clone(),
+                    _ => return None,
+                })
+            }
+            Source::Actions(actions) => {
+                let action = actions.get(item)?;
+                Some(match field {
+                    "name" => action.name.clone(),
+                    "calls" => action.calls.subject_name().to_string(),
+                    "produces" => action.produces.join(", "),
+                    _ => return None,
+                })
+            }
+        }
+    }
+
+    /// The field a bare `<doc-value/>` answers. Every collection but `claims` and `documents`
+    /// names its items, so those two require the attribute rather than guessing one.
+    fn default_field(&self) -> Option<&'static str> {
+        match self {
+            Source::Claims(_) | Source::Documents(_) => None,
+            _ => Some("name"),
+        }
+    }
+}
+
+/// The channel that produced a claim's outcome, spelled the way the result document spells it.
+fn channel_name(channel: &BoundChannel) -> &'static str {
+    match channel {
+        BoundChannel::Scenario { .. } => "scenario",
+        BoundChannel::Artefact { .. } => "artefact",
+        BoundChannel::Citation { .. } => "citation",
+        BoundChannel::Judge => "judge",
+    }
 }

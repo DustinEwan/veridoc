@@ -1,12 +1,17 @@
-//! The `.spec.md` grammar: an attribute list on each heading, sections split at headings,
-//! spans numbered by the engine, and the section hash. The syntax is veridoc's own, so this
+//! The `.spec.md` grammar: markdown annotated with `doc-` elements. A section opens with a
+//! `<doc-section name="…">` on its own line and ends at the next one, and a claim is referenced
+//! by a `<doc-claim name="…"/>` that sits inside a sentence. Headings are prose: a heading means
+//! nothing to this parser, so an author may use one inside a section freely. Spans are numbered
+//! by the engine, and the section hash covers the body. The syntax is veridoc's own, so this
 //! parser is engine-owned and crosses no plugin boundary.
 //!
 //! ```markdown
-//! ## What the scanner refuses {#refuses selects="concept:project-scan kind:ensures" claims="c1a2"}
+//! <doc-section name="scanner">
+//!
+//! ## What the scanner refuses
+//!
+//! The scanner reads its configuration from one directory <doc-claim name="rejects-missing-config"/>.
 //! ```
-
-use veridoc_protocol::{Kind, Selects};
 
 /// A parsed `.spec.md` file.
 #[derive(Debug, Clone)]
@@ -15,22 +20,49 @@ pub struct SpecFile {
     pub sections: Vec<Section>,
 }
 
-/// One section: a heading and the body up to the next heading of any level.
+/// One section: the subject its prose is about, and the body up to the next `<doc-section>`.
 #[derive(Debug, Clone)]
 pub struct Section {
-    pub anchor: String,
-    pub heading: String,
-    pub level: u32,
+    /// The `name` of the opening element: the claim subject this section's prose covers. It may
+    /// repeat across the project, because coverage is what the build enforces.
+    pub subject: String,
     pub line: u32,
-    /// The parsed `selects="…"` attribute; empty when the heading carries none.
-    pub selects: Selects,
-    /// The parsed `claims="…"` attribute.
-    pub claims: Vec<String>,
-    /// True when the heading carries neither `selects` nor `claims`.
-    pub no_selection: bool,
+    /// The `<doc-claim>` references in the body, each with the line it sits on.
+    pub references: Vec<Reference>,
+    /// The `<doc-each>` elements in the body, each with the block it repeats.
+    pub injections: Vec<Injection>,
+    /// True when the section names no claim. Prose-only sections are legal, so this warns.
+    pub no_references: bool,
     pub spans: Vec<Span>,
     /// The section body, used for the section hash and the brief.
     pub body: String,
+}
+
+/// One `<doc-claim name="…"/>`: the predicate half of a claim's name, written by the author. The
+/// opening element supplies the subject half, and bind resolves the pair or stops the build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reference {
+    pub predicate: String,
+    pub line: u32,
+}
+
+/// One `<doc-each source="…">` and the one block after it that repeats. `bind` assembles the
+/// section by replacing the element and its block with one copy of the block per value the source
+/// names (`docs/decisions/0011-an-authored-placeholder-pulls-its-content-at-assembly.md`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Injection {
+    /// The line the opening element sits on, which is the line every error about it names.
+    pub line: u32,
+    /// The `source` attribute: the collection to gather.
+    pub source: String,
+    /// The half-open byte range the element and its block occupy in [`Section::body`].
+    pub start: usize,
+    pub end: usize,
+    /// The authored block itself, without the opening element: the text one copy renders.
+    pub block: String,
+    /// The `field` of every `<doc-value>` inside the block, in order. `None` is a bare
+    /// `<doc-value/>`, which takes the collection's default field.
+    pub fields: Vec<Option<String>>,
 }
 
 /// One authored span. Ids are assigned by the engine at assembly time; a verdict citing an
@@ -51,101 +83,174 @@ pub struct SpecProblem {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpecProblemKind {
-    /// A heading with no `{#id …}`; every heading but the first level-1 heading needs one.
-    MissingId,
-    /// A heading with neither `selects` nor `claims`. Reported as a warning, not an error.
-    NoSelection,
-    /// A section id used twice in one file.
-    DuplicateId(String),
+    /// A `<doc-section>` with no `name="…"`, so the section states no subject.
+    MissingSubjectName,
+    /// A `<doc-…>` element this grammar does not define.
+    UnknownElement(String),
+    /// An element that has to sit on a line of its own and does not.
+    MisplacedElement(String),
+    /// A `<doc-each>` with no `source="…"`, so the element asks for nothing.
+    MissingSource,
+    /// A `<doc-each>` with no block after it, so there is nothing to repeat.
+    MissingBlock,
+    /// A `<doc-value>` outside the block of a `<doc-each>`, where no value can land.
+    ValueOutsideEach,
+    /// A section that names no claim. Reported as a warning, not an error.
+    NoReferences,
 }
+
+/// The elements this grammar defines. `doc-each` and `doc-value` pull their content when the
+/// engine assembles the section body, which is where a value that the code decides lands.
+const KNOWN_ELEMENTS: [&str; 4] = ["doc-section", "doc-claim", "doc-each", "doc-value"];
 
 /// Parse one `.spec.md` file. `path` is the project-relative path used in messages.
 pub fn parse(path: &str, text: &str) -> (SpecFile, Vec<SpecProblem>) {
     let mut sections: Vec<Section> = Vec::new();
     let mut problems: Vec<SpecProblem> = Vec::new();
-    let mut seen_ids: Vec<String> = Vec::new();
-    let mut first_h1_seen = false;
-
     let lines: Vec<&str> = text.split('\n').collect();
-    let mut index = 0usize;
-    while index < lines.len() {
-        let level = heading_level(lines[index]);
-        if level == 0 {
-            index += 1;
-            continue;
-        }
-        let line_no = (index + 1) as u32;
-        let (title, attrs) = split_attributes(lines[index].trim_start_matches('#').trim());
+    let in_fence = fence_mask(&lines);
+    let openers: Vec<usize> = opener_lines(&lines, &in_fence);
+    for (position, opener) in openers.iter().enumerate() {
+        let line_no = (*opener + 1) as u32;
+        let body_start = opener + 1;
+        let body_end = openers.get(position + 1).copied().unwrap_or(lines.len());
+        let body_lines = &lines[body_start..body_end];
+        let body = body_lines.join("\n");
+        let starts = line_starts(body_lines);
 
-        // The first level-1 heading is exempt from the id requirement.
-        let is_first_h1 = level == 1 && !first_h1_seen;
-        if level == 1 {
-            first_h1_seen = true;
-        }
-
-        let anchor = attrs.as_ref().and_then(|a| a.id.clone()).unwrap_or_default();
-        if anchor.is_empty() && !is_first_h1 {
+        let subject = attr(&element_attrs(lines[*opener]), "name");
+        if subject.is_empty() {
             problems.push(SpecProblem {
                 file: path.to_string(),
                 line: line_no,
-                kind: SpecProblemKind::MissingId,
+                kind: SpecProblemKind::MissingSubjectName,
             });
         }
-        if !anchor.is_empty() {
-            if seen_ids.contains(&anchor) {
+
+        // `doc-each` is scanned first, because a `<doc-value>` is only legal inside the block an
+        // opener repeats, and the reference pass below needs that set to tell a placeholder from
+        // a stray element.
+        let mut injections: Vec<Injection> = Vec::new();
+        let mut value_lines: Vec<usize> = Vec::new();
+        let mut cursor = 0;
+        while cursor < body_lines.len() {
+            if in_fence[body_start + cursor] {
+                cursor += 1;
+                continue;
+            }
+            let opener_line = body_lines[cursor].trim();
+            if !opener_line.starts_with("<doc-each") || !opener_line.ends_with('>') {
+                cursor += 1;
+                continue;
+            }
+            let where_line = line_no + cursor as u32 + 1;
+            let source = attr(&element_attrs(body_lines[cursor]), "source");
+            if source.is_empty() {
                 problems.push(SpecProblem {
                     file: path.to_string(),
-                    line: line_no,
-                    kind: SpecProblemKind::DuplicateId(anchor.clone()),
+                    line: where_line,
+                    kind: SpecProblemKind::MissingSource,
                 });
             }
-            seen_ids.push(anchor.clone());
-            // A section with an id but no selection is a warning.
-            let selects = attrs
-                .as_ref()
-                .and_then(|a| a.get("selects"))
-                .map(parse_selects)
-                .unwrap_or_default();
-            let claims: Vec<String> = attrs
-                .as_ref()
-                .and_then(|a| a.get("claims"))
-                .map(|v| {
-                    v.split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect()
-                })
-                .unwrap_or_default();
-            if selects.is_empty() && claims.is_empty() {
+            let Some((first, last)) = repeat_block(body_lines, cursor) else {
                 problems.push(SpecProblem {
                     file: path.to_string(),
-                    line: line_no,
-                    kind: SpecProblemKind::NoSelection,
+                    line: where_line,
+                    kind: SpecProblemKind::MissingBlock,
                 });
+                cursor += 1;
+                continue;
+            };
+            // The block is copied verbatim per value, so a `<doc-value>` on any of its lines is
+            // live, fence markers included: an exit-code table is a fenced block, and the values
+            // of a table are exactly what the code decides.
+            let mut fields = Vec::new();
+            for (index, line) in (first..=last).map(|index| (index, body_lines[index])) {
+                value_lines.push(body_start + index);
+                for (tag, attributes) in elements(line) {
+                    if tag == "doc-value" {
+                        fields.push(attr_opt(&attributes, "field"));
+                    }
+                }
             }
-            sections.push(make_section(
-                path, title, level, line_no, anchor, selects, claims, &lines, index,
-            ));
-        } else {
-            // The exempt first level-1 heading: kept in the parse so the body is not lost,
-            // but it selects nothing and warns nothing.
-            sections.push(make_section(
-                path,
-                title,
-                level,
-                line_no,
-                anchor,
-                Selects::default(),
-                Vec::new(),
-                &lines,
-                index,
-            ));
+            injections.push(Injection {
+                line: where_line,
+                source,
+                start: starts[cursor],
+                end: starts[last] + body_lines[last].len(),
+                block: body_lines[first..=last].join("\n"),
+                fields,
+            });
+            cursor = last + 1;
         }
 
-        // Skip the body of this section: it ends at the next heading.
-        index += 1;
-        while index < lines.len() && heading_level(lines[index]) == 0 {
-            index += 1;
+        let mut references: Vec<Reference> = Vec::new();
+        for (offset, line) in body_lines.iter().enumerate() {
+            if in_fence[body_start + offset] {
+                continue;
+            }
+            let where_line = line_no + offset as u32 + 1;
+            for (tag, attributes) in elements(line) {
+                match tag.as_str() {
+                    "doc-claim" => references.push(Reference {
+                        predicate: attr(&attributes, "name"),
+                        line: where_line,
+                    }),
+                    "doc-value" => {
+                        if !value_lines.contains(&(body_start + offset)) {
+                            problems.push(SpecProblem {
+                                file: path.to_string(),
+                                line: where_line,
+                                kind: SpecProblemKind::ValueOutsideEach,
+                            });
+                        }
+                    }
+                    // An opener that is not alone on its line is reported by the misplaced scan
+                    // below, which names the element and the rule it broke.
+                    "doc-each" | "doc-section" => {}
+                    other => problems.push(SpecProblem {
+                        file: path.to_string(),
+                        line: where_line,
+                        kind: SpecProblemKind::UnknownElement(other.to_string()),
+                    }),
+                }
+            }
+        }
+
+        let no_references = references.is_empty();
+        if no_references {
+            problems.push(SpecProblem {
+                file: path.to_string(),
+                line: line_no,
+                kind: SpecProblemKind::NoReferences,
+            });
+        }
+        sections.push(Section {
+            subject,
+            line: line_no,
+            references,
+            injections,
+            no_references,
+            spans: assign_spans(&body),
+            body,
+        });
+    }
+
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let element = if trimmed.starts_with("<doc-section") {
+            "doc-section"
+        } else if trimmed.starts_with("<doc-each") {
+            "doc-each"
+        } else {
+            continue;
+        };
+        if !in_fence[index] && !trimmed.ends_with('>') {
+            problems.push(SpecProblem {
+                file: path.to_string(),
+                line: (index + 1) as u32,
+                kind: SpecProblemKind::MisplacedElement(element.to_string()),
+            });
         }
     }
 
@@ -158,96 +263,145 @@ pub fn parse(path: &str, text: &str) -> (SpecFile, Vec<SpecProblem>) {
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn make_section(
-    _path: &str,
-    heading: String,
-    level: u32,
-    line: u32,
-    anchor: String,
-    selects: Selects,
-    claims: Vec<String>,
-    lines: &[&str],
-    heading_index: usize,
-) -> Section {
-    let mut body_end = heading_index + 1;
-    while body_end < lines.len() && heading_level(lines[body_end]) == 0 {
-        body_end += 1;
+/// Lines inside a fenced code block, fence markers included. The grammar reads no element on
+/// those lines, so a document that shows this grammar in a sample neither opens a section nor
+/// names a claim.
+fn fence_mask(lines: &[&str]) -> Vec<bool> {
+    let mut mask = vec![false; lines.len()];
+    let mut in_fence = false;
+    for (index, line) in lines.iter().enumerate() {
+        if is_fence_line(line) {
+            in_fence = !in_fence;
+            mask[index] = true;
+            continue;
+        }
+        mask[index] = in_fence;
     }
-    let body = lines[heading_index + 1..body_end].join("\n");
-    let no_selection = anchor.is_empty() || (selects.is_empty() && claims.is_empty());
-    Section {
-        anchor,
-        heading,
-        level,
-        line,
-        selects,
-        claims,
-        no_selection,
-        spans: assign_spans(&body),
-        body,
-    }
+    mask
 }
 
-/// The `#` count of a heading line, or 0 when it is not a heading. A `#` inside a fenced code
-/// block is not a heading: the body-collection loops only test lines outside a body, and the
-/// span assigner treats fenced content as one span, so fenced `#` lines never reach here as
-/// headings of the enclosing file… except in the body-skip loop, which is why a fence inside
-/// a body must not contain heading-looking lines that end the section. v1 accepts that limit:
-/// a fenced `#` line ends a section, and the example projects do not contain one.
-fn heading_level(line: &str) -> u32 {
-    let trimmed = line.trim_start();
-    let hashes = trimmed.len() - trimmed.trim_start_matches('#').len();
-    if hashes == 0 || hashes > 6 {
-        return 0;
+/// The lines that open a section: a `<doc-section …>` alone on its line, outside a fenced block.
+fn opener_lines(lines: &[&str], in_fence: &[bool]) -> Vec<usize> {
+    let mut openers = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if in_fence[index] {
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.starts_with("<doc-section") && trimmed.ends_with('>') {
+            openers.push(index);
+        }
     }
-    let rest = &trimmed[hashes..];
-    if rest.is_empty() || rest.starts_with(' ') {
-        hashes as u32
-    } else {
-        0
+    openers
+}
+
+fn is_fence_line(line: &str) -> bool {
+    line.trim_start().starts_with("```")
+}
+
+/// The attributes of the single element written on a line, as `key` and `value` pairs.
+fn element_attrs(line: &str) -> Vec<(String, String)> {
+    elements(line)
+        .into_iter()
+        .next()
+        .map(|(_, attributes)| attributes)
+        .unwrap_or_default()
+}
+
+/// The value of one attribute, or the empty string when the element does not carry it.
+fn attr(attributes: &[(String, String)], key: &str) -> String {
+    attr_opt(attributes, key).unwrap_or_default()
+}
+
+/// The value of one attribute, or `None` when the element does not carry it.
+fn attr_opt(attributes: &[(String, String)], key: &str) -> Option<String> {
+    attributes
+        .iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.clone())
+}
+
+/// The byte offset of each line inside `lines.join("\n")`, so an element can name the exact range
+/// assembly replaces.
+fn line_starts(lines: &[&str]) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(lines.len());
+    let mut next = 0;
+    for line in lines {
+        starts.push(next);
+        next += line.len() + 1;
     }
+    starts
 }
 
-/// Split `title {#id key="value"}` into the title and the parsed attribute list.
-fn split_attributes(raw: &str) -> (String, Option<Attrs>) {
-    let open = match raw.rfind('{') {
-        Some(i) if raw.trim_end().ends_with('}') => i,
-        _ => return (raw.to_string(), None),
-    };
-    let close = raw.trim_end().len() - 1;
-    let title = raw[..open].trim_end().to_string();
-    let inner = &raw[open + 1..close];
-    (title, Some(parse_attrs(inner)))
-}
-
-struct Attrs {
-    id: Option<String>,
-    pairs: Vec<(String, String)>,
-}
-
-impl Attrs {
-    fn get(&self, key: &str) -> Option<&str> {
-        self.pairs
-            .iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v.as_str())
+/// The block the opener at `opener` repeats: one blank line after the opener is skipped, then
+/// either one fenced block, fence markers included, or the run of lines up to the next blank line.
+/// `None` when the section ends before a block starts, or a fence opens and never closes, because
+/// then there is no block to repeat and an author must be told rather than shown nothing.
+fn repeat_block(body_lines: &[&str], opener: usize) -> Option<(usize, usize)> {
+    let mut first = opener + 1;
+    if body_lines
+        .get(first)
+        .is_some_and(|line| line.trim().is_empty())
+    {
+        first += 1;
     }
+    if first >= body_lines.len() {
+        return None;
+    }
+    if is_fence_line(body_lines[first]) {
+        let mut last = first + 1;
+        while last < body_lines.len() && !is_fence_line(body_lines[last]) {
+            last += 1;
+        }
+        return if last < body_lines.len() {
+            Some((first, last))
+        } else {
+            None
+        };
+    }
+    let mut last = first;
+    while last + 1 < body_lines.len()
+        && !body_lines[last + 1].trim().is_empty()
+        && !is_fence_line(body_lines[last + 1])
+    {
+        last += 1;
+    }
+    Some((first, last))
 }
 
-/// Parse `#id key="value" key="value"`. Tokens are whitespace-separated; a quoted value may
-/// contain spaces.
-fn parse_attrs(inner: &str) -> Attrs {
-    let mut id = None;
+/// Every `<doc-…>` element on one line, as its tag name and its parsed attributes.
+fn elements(line: &str) -> Vec<(String, Vec<(String, String)>)> {
+    let mut out = Vec::new();
+    let mut rest = line;
+    while let Some(start) = rest.find("<doc-") {
+        let Some(end) = rest[start..].find('>') else {
+            break;
+        };
+        let inner = &rest[start + 1..start + end];
+        let tag_end = inner
+            .find(|c: char| c.is_whitespace() || c == '/')
+            .unwrap_or(inner.len());
+        let tag = inner[..tag_end].trim_end_matches('/').to_string();
+        let attributes = parse_attrs(inner[tag_end..].trim_end_matches('/').trim());
+        if KNOWN_ELEMENTS.contains(&tag.as_str()) {
+            out.push((tag, attributes));
+        } else {
+            out.push((tag, Vec::new()));
+        }
+        rest = &rest[start + end + 1..];
+    }
+    out
+}
+
+/// Parse `name="scanner" kind="ensures"` into pairs. A quoted value may contain spaces.
+fn parse_attrs(inner: &str) -> Vec<(String, String)> {
     let mut pairs = Vec::new();
     for token in tokenize(inner) {
-        if let Some(rest) = token.strip_prefix('#') {
-            id = Some(rest.to_string());
-        } else if let Some(eq) = token.find('=') {
+        if let Some(eq) = token.find('=') {
             pairs.push((token[..eq].to_string(), token[eq + 1..].to_string()));
         }
     }
-    Attrs { id, pairs }
+    pairs
 }
 
 /// Split on whitespace outside double quotes, dropping the quotes.
@@ -280,41 +434,10 @@ fn tokenize(inner: &str) -> Vec<String> {
     out
 }
 
-/// Parse `concept:project-scan kind:ensures,witnesses referent:vd:r:x` into a `Selects`.
-fn parse_selects(value: &str) -> Selects {
-    let mut selects = Selects::default();
-    for pair in value.split_whitespace() {
-        let Some((key, val)) = pair.split_once(':') else {
-            continue;
-        };
-        match key {
-            "concept" => selects.concept = Some(val.to_string()),
-            "kind" => {
-                let kinds = val.split(',').filter_map(parse_kind).collect::<Vec<_>>();
-                if !kinds.is_empty() {
-                    selects.kind = Some(kinds);
-                }
-            }
-            "referent" => selects.referent = Some(val.to_string()),
-            _ => {}
-        }
-    }
-    selects
-}
-
-fn parse_kind(name: &str) -> Option<Kind> {
-    Some(match name {
-        "requires" => Kind::Requires,
-        "ensures" => Kind::Ensures,
-        "invariant" => Kind::Invariant,
-        "witness" => Kind::Witness,
-        "because" => Kind::Because,
-        _ => return None,
-    })
-}
-
 /// Split a section body into spans. A paragraph is split into sentences at `[.!?]` followed by
-/// whitespace; a list item is one span; a fenced code block is one span.
+/// whitespace; a list item is one span; a fenced code block is one span. An element written
+/// inside a sentence stays in that sentence's text, because the annotation is part of the line
+/// the author wrote and the hash covers it.
 pub fn assign_spans(body: &str) -> Vec<Span> {
     let mut spans: Vec<String> = Vec::new();
     let mut in_fence = false;
@@ -424,5 +547,25 @@ pub fn normalized_body(body: &str) -> String {
         out.push_str(line.trim_end());
         out.push('\n');
     }
+    out
+}
+
+/// Replace every `<doc-value …>` in a repeating block with the value the caller supplies for its
+/// `field`. A bare `<doc-value/>` asks for the empty field name, which is the caller's signal to
+/// use the collection's own name. Assembly copies the block once per value, so the block is the
+/// only place a value can land (`docs/decisions/0011-an-authored-placeholder-pulls-its-content-at-assembly.md`).
+pub fn substitute(block: &str, value_of: &dyn Fn(&str) -> String) -> String {
+    let mut out = String::with_capacity(block.len());
+    let mut rest = block;
+    while let Some(start) = rest.find("<doc-value") {
+        let Some(end) = rest[start..].find('>') else {
+            break;
+        };
+        out.push_str(&rest[..start]);
+        let inner = rest[start + 1..start + end].trim_end_matches('/');
+        out.push_str(&value_of(&attr(&parse_attrs(inner), "field")));
+        rest = &rest[start + end + 1..];
+    }
+    out.push_str(rest);
     out
 }

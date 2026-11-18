@@ -30,7 +30,7 @@ pub struct BriefSpan {
     pub text: String,
 }
 
-/// One selected claim, rendered for a reader who sees no code: the subject and signature are
+/// One named claim, rendered for a reader who sees no code: the subject and signature are
 /// words, and the outcome the deterministic stage reached travels with the sentence.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BriefClaim {
@@ -87,7 +87,7 @@ impl Brief {
             }
         }
         if !self.claims.is_empty() {
-            out.push_str("\n### Selected claims\n");
+            out.push_str("\n### Named claims\n");
             for claim in &self.claims {
                 out.push_str(&format!(
                     "{}  kind: {}  outcome: {}\n",

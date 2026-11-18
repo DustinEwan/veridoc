@@ -8,7 +8,10 @@ use veridoc_engine::result::{self, ClaimResult, Metrics, ResultDocument, Span, T
 use veridoc_protocol::Kind;
 
 fn tmp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("vd-engine-result-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "veridoc-engine-result-{}-{name}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -16,11 +19,10 @@ fn tmp_dir(name: &str) -> PathBuf {
 
 fn sample_doc(text: &str) -> ResultDocument {
     ResultDocument {
-        protocol_version: "vd/1".into(),
+        protocol_version: "veridoc/1".into(),
         generated_at: String::new(),
         tree: vec![TreeNode {
             path: "docs/architecture.spec.md".into(),
-            anchor: None,
             audience: "an author".into(),
             question: "What must my plugin answer?".into(),
             order: 0,
@@ -28,13 +30,13 @@ fn sample_doc(text: &str) -> ResultDocument {
         }],
         sections: vec![result::SectionResult {
             file: "docs/architecture.spec.md".into(),
-            anchor: "refuses".into(),
-            heading: "What the scanner refuses".into(),
+            subject: "scanner".into(),
             spans: vec![Span {
                 id: "sp1".into(),
                 text: text.into(),
             }],
-            selects: vec!["c000000000000001".into()],
+            claims: vec!["c000000000000001".into()],
+            injections: vec![],
         }],
         claims: vec![ClaimResult {
             id: "c000000000000001".into(),
@@ -42,7 +44,7 @@ fn sample_doc(text: &str) -> ResultDocument {
             text: "A missing project root is refused.".into(),
             predicate: "rejects-missing-project-root".into(),
             concept: "project-scan".into(),
-            referent_id: "vd:r:abc".into(),
+            referent_id: "veridoc:referent:abc".into(),
             signature: "function parseConfig(root: string): ProjectConfig".into(),
             channel: "scenario".into(),
             outcome: result::Outcome::Supported,
@@ -72,7 +74,10 @@ fn two_identical_runs_share_a_hash_and_differ_in_generated_at() {
     std::thread::sleep(std::time::Duration::from_millis(1_100));
     let second = result::write_result(&root, &sample_doc("The scanner walks upward.")).unwrap();
     let written_at_2 = read_generated_at(&root);
-    assert_eq!(first, second, "an identical document must produce the same resultHash");
+    assert_eq!(
+        first, second,
+        "an identical document must produce the same resultHash"
+    );
     assert!(!written_at_1.is_empty() && !written_at_2.is_empty());
     assert_ne!(
         written_at_1, written_at_2,
@@ -86,23 +91,28 @@ fn an_edited_sentence_moves_the_hash_and_the_recorded_hash_follows() {
     let first = result::write_result(&root, &sample_doc("The scanner walks upward.")).unwrap();
     let recorded = std::fs::read_to_string(root.join(".veridoc/last-result-hash")).unwrap();
     assert_eq!(recorded.trim(), first);
-    let second = result::write_result(&root, &sample_doc("The scanner walks upward first.")).unwrap();
+    let second =
+        result::write_result(&root, &sample_doc("The scanner walks upward first.")).unwrap();
     assert_ne!(first, second);
     let recorded = std::fs::read_to_string(root.join(".veridoc/last-result-hash")).unwrap();
-    assert_eq!(recorded.trim(), second, "last-result-hash is rewritten after each run");
+    assert_eq!(
+        recorded.trim(),
+        second,
+        "last-result-hash is rewritten after each run"
+    );
 }
 
 #[test]
 fn the_write_is_atomic_and_leaves_no_temporary_file() {
     let root = tmp_dir("atomic");
     result::write_result(&root, &sample_doc("The scanner walks upward.")).unwrap();
-    let vd = root.join(".veridoc");
-    assert!(vd.join("result.json").is_file());
+    let out = root.join(".veridoc");
+    assert!(out.join("result.json").is_file());
     assert!(
-        !vd.join("result.json.tmp").exists(),
+        !out.join("result.json.tmp").exists(),
         "the temporary file must not survive the rename"
     );
-    let text = std::fs::read_to_string(vd.join("result.json")).unwrap();
+    let text = std::fs::read_to_string(out.join("result.json")).unwrap();
     let value: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(
         value["claims"][0]["outcome"] == "supported",

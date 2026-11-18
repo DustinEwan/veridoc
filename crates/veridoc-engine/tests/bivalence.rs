@@ -2,10 +2,10 @@
 //! without the accepted-and-rejecting pair is a bind error, and a plugin error is a run
 //! failure that leaves the claim in no state at all.
 
-use veridoc_engine::bivalence::{self, Outcome};
 use veridoc_engine::bind::{BindError, BoundChannel, BoundClaim};
+use veridoc_engine::bivalence::{self, Outcome};
+use veridoc_protocol::{AssertLeaf, Asserts, BivalenceMethod, BivalenceResult, Capability, Check};
 use veridoc_protocol::{Call, Loss};
-use veridoc_protocol::{Asserts, AssertLeaf, BivalenceMethod, BivalenceResult, Capability, Check};
 
 const ALL_CAPS: &[Capability] = &[
     Capability::Collect,
@@ -26,8 +26,8 @@ fn scenario_claim() -> BoundClaim {
         text: "A missing project root is refused.".into(),
         file: "src/cli.doc.ts".into(),
         line: 3,
-        supports: vec![],
-        referent_id: "vd:r:probe".into(),
+        subject: "probe".into(),
+        referent_id: "veridoc:referent:probe".into(),
         signature: "function probe(dir: string): number".into(),
         channel: BoundChannel::Scenario {
             scenario_id: "config/rejects-missing-root".into(),
@@ -42,13 +42,13 @@ fn scenario_claim() -> BoundClaim {
     }
 }
 
-fn run(
-    caps: &[Capability],
-    answer: Call<BivalenceResult>,
-) -> Result<Outcome, String> {
-    bivalence::gate(vec![scenario_claim()], "veridoc-fakeplugin", caps, move |_| {
-        answer.clone()
-    })
+fn run(caps: &[Capability], answer: Call<BivalenceResult>) -> Result<Outcome, String> {
+    bivalence::gate(
+        vec![scenario_claim()],
+        "veridoc-fakeplugin",
+        caps,
+        move |_| answer.clone(),
+    )
 }
 
 #[test]
@@ -101,7 +101,10 @@ fn witnesses_without_the_pair_is_a_bind_error_naming_the_reason() {
         }),
     )
     .expect("gate");
-    assert!(outcome.claims.is_empty(), "an errored claim is settled in no channel");
+    assert!(
+        outcome.claims.is_empty(),
+        "an errored claim is settled in no channel"
+    );
     let BindError::WitnessPair { reason, .. } = &outcome.errors[0] else {
         panic!("expected WitnessPair, got {:?}", outcome.errors[0]);
     };
@@ -156,7 +159,11 @@ fn a_plugin_error_is_a_run_failure_and_leaves_the_claim_unsettled() {
 #[test]
 fn no_bivalence_capability_makes_the_scenario_claim_an_error() {
     let outcome = run(
-        &[Capability::Collect, Capability::Resolution, Capability::Execution],
+        &[
+            Capability::Collect,
+            Capability::Resolution,
+            Capability::Execution,
+        ],
         Call::Result(BivalenceResult {
             bivalent: true,
             method: BivalenceMethod::Structural,

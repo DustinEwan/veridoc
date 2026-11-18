@@ -3,7 +3,7 @@
 //! `run` drives one plugin over the protocol exactly as a check drives it — the same
 //! `Launch`/`PluginClient` transport the engine uses — and reports, rule by rule, whether it
 //! conforms. Every response is validated as an instance of the committed schema in
-//! `docs/schema/vd-1/` before it is deserialized, so a silent protocol drift (a field added,
+//! `docs/schema/veridoc-1/` before it is deserialized, so a silent protocol drift (a field added,
 //! renamed, or retyped on one side) is a rule failure, not a serde surprise.
 //!
 //! The fixture project is rendered by the plugin's own conformance emitter, whose contract is
@@ -192,39 +192,39 @@ fn read_manifest(project: &Path) -> Result<Manifest, String> {
 
 /// The committed schemas, embedded at compile time. The suite must validate with only the
 /// executable present — an installed binary has no repository tree to read — and the xtask
-/// drift test is what keeps these bytes equal to `docs/schema/vd-1`.
+/// drift test is what keeps these bytes equal to `docs/schema/veridoc-1`.
 const SCHEMAS: &[(&str, &str)] = &[
     (
         "handshake.json",
-        include_str!("../../../docs/schema/vd-1/handshake.json"),
+        include_str!("../../../docs/schema/veridoc-1/handshake.json"),
     ),
     (
         "collect-result.json",
-        include_str!("../../../docs/schema/vd-1/collect-result.json"),
+        include_str!("../../../docs/schema/veridoc-1/collect-result.json"),
     ),
     (
         "resolve-result.json",
-        include_str!("../../../docs/schema/vd-1/resolve-result.json"),
+        include_str!("../../../docs/schema/veridoc-1/resolve-result.json"),
     ),
     (
         "derivable-result.json",
-        include_str!("../../../docs/schema/vd-1/derivable-result.json"),
+        include_str!("../../../docs/schema/veridoc-1/derivable-result.json"),
     ),
     (
         "bivalence-result.json",
-        include_str!("../../../docs/schema/vd-1/bivalence-result.json"),
+        include_str!("../../../docs/schema/veridoc-1/bivalence-result.json"),
     ),
     (
         "cite-result.json",
-        include_str!("../../../docs/schema/vd-1/cite-result.json"),
+        include_str!("../../../docs/schema/veridoc-1/cite-result.json"),
     ),
     (
         "surface-result.json",
-        include_str!("../../../docs/schema/vd-1/surface-result.json"),
+        include_str!("../../../docs/schema/veridoc-1/surface-result.json"),
     ),
     (
         "run-response.json",
-        include_str!("../../../docs/schema/vd-1/run-response.json"),
+        include_str!("../../../docs/schema/veridoc-1/run-response.json"),
     ),
 ];
 
@@ -287,7 +287,7 @@ fn params<T: Serialize>(request: &T) -> Option<Value> {
 }
 
 /// The gate on one rule (§12 item 3): the capability whose method it calls, and the rules whose
-/// answer it reads, in the order [`RULES`] drives them. `vd-1.profile.json` states the same
+/// answer it reads, in the order [`RULES`] drives them. `veridoc-1.profile.json` states the same
 /// relation as `requiresCapability` and `dependsOn`, and `tests/profile_spec.rs` pins the two
 /// tables together.
 pub const GATES: &[(&str, Option<Capability>, &[&str])] = &[
@@ -700,7 +700,7 @@ fn scenario(
                 .claims
                 .iter()
                 .find(|c| c.predicate == expect.predicate)
-                .map(|c| claim_id_for(&referents, c))
+                .map(|c| Ok(claim_id_for(c)))
             {
                 None => Err(format!(
                     "collect reported no claim with predicate \"{}\"",
@@ -746,7 +746,7 @@ fn scenario(
     // 6. run-returns-values. The engine evaluates the assertion tree, so the answer must be
     // values: ok, every declared observable, one answer per leaf, and no verdict field.
     if !suite.decided("run-returns-values") {
-        if let Err(detail) = run_scenario(manifest, client, deadline, &collect, &referents) {
+        if let Err(detail) = run_scenario(manifest, client, deadline, &collect) {
             suite.fail("run-returns-values", detail);
         }
     }
@@ -813,17 +813,11 @@ fn method_name(method: BivalenceMethod) -> String {
     }
 }
 
-/// The engine's claim id for a collected claim: the same `hash::claim_id` the bind pass uses,
-/// so the plugin sees the id a real run would send.
-fn claim_id_for(
-    referents: &BTreeMap<String, (String, String)>,
-    claim: &RawClaim,
-) -> Result<String, String> {
-    let key = claim.subject.key();
-    referents
-        .get(&key)
-        .map(|(id, _)| hash::claim_id(id, &claim.predicate))
-        .ok_or_else(|| format!("{key} has no resolved referent to build the claim id from"))
+/// The claim id a collected claim carries: the same readable name `hash::claim_name` gives the
+/// bind pass, so the plugin sees the id a real run would send (`docs/spec.md:152-158`). It is
+/// built from the author's subject name, so it needs no resolved referent.
+fn claim_id_for(claim: &RawClaim) -> String {
+    hash::claim_name(claim.subject.subject_name(), &claim.predicate)
 }
 
 /// Drive the manifest's scenario and check the shape of the answer: values, not verdicts.
@@ -832,7 +826,6 @@ fn run_scenario(
     client: &PluginClient,
     deadline: Duration,
     collect: &CollectResult,
-    referents: &BTreeMap<String, (String, String)>,
 ) -> Result<(), String> {
     let claim = collect
         .claims
@@ -844,7 +837,7 @@ fn run_scenario(
                 manifest.scenario_claim
             )
         })?;
-    let claim_id = claim_id_for(referents, claim)?;
+    let claim_id = claim_id_for(claim);
     let asserts = claim
         .channel
         .asserts

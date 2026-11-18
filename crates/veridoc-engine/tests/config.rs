@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use veridoc_engine::config;
 
 fn tmp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("vd-engine-config-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "veridoc-engine-config-{}-{name}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     // Canonical so the loaded absolute paths compare equal without symlink surprises.
@@ -33,13 +36,13 @@ fn defaults_apply_to_every_omitted_key() {
     let path = write_config(&root, MINIMAL);
     let loaded = config::load(&path).expect("minimal config loads");
     assert_eq!(loaded.root, root.canonicalize().unwrap());
-    assert_eq!(loaded.config.protocol, "vd/1");
+    assert_eq!(loaded.config.protocol, "veridoc/1");
     assert_eq!(loaded.config.plugin.handshake_timeout_ms, 30_000);
     assert_eq!(loaded.config.plugin.collect_timeout_ms, 120_000);
     assert_eq!(loaded.config.coverage.required, 0.0);
     assert_eq!(loaded.config.run.scenario_deadline_ms, 30_000);
     assert_eq!(loaded.config.judge.transport, "command");
-    assert_eq!(loaded.config.judge.prompt_version, "vd-prompt-1");
+    assert_eq!(loaded.config.judge.prompt_version, "veridoc-prompt-1");
     assert_eq!(loaded.config.judge.timeout_ms, 120_000);
     assert_eq!(loaded.config.output.dir, ".veridoc/out");
     assert_eq!(
@@ -53,10 +56,7 @@ fn an_unknown_field_is_a_configuration_error_naming_it() {
     let root = tmp_dir("unknown");
     let path = write_config(
         &root,
-        &MINIMAL.replace(
-            "\"judge\"",
-            "\"semanticRules\": { \"k\": 1 }, \"judge\"",
-        ),
+        &MINIMAL.replace("\"judge\"", "\"semanticRules\": { \"k\": 1 }, \"judge\""),
     );
     let err = config::load(&path).unwrap_err().to_string();
     assert!(
@@ -69,9 +69,9 @@ fn an_unknown_field_is_a_configuration_error_naming_it() {
 fn each_rejection_carries_its_exact_message() {
     let cases: Vec<(&str, &str)> = vec![
         (
-            r#"{ "protocol": "vd/2", "plugin": { "command": ["true"] },
+            r#"{ "protocol": "veridoc/2", "plugin": { "command": ["true"] },
                 "judge": { "command": ["true"], "model": "m" } }"#,
-            "protocol \"vd/2\" is not supported; this build speaks \"vd/1\"",
+            "protocol \"veridoc/2\" is not supported; this build speaks \"veridoc/1\"",
         ),
         (
             r#"{ "judge": { "command": ["true"], "model": "m" } }"#,
@@ -139,9 +139,15 @@ fn discovery_walks_upward_to_the_nearest_veridoc_directory() {
     let path = write_config(&root, MINIMAL);
     let deep = root.join("a").join("b").join("c");
     std::fs::create_dir_all(&deep).unwrap();
-    assert_eq!(config::discover(&deep).unwrap(), path.canonicalize().unwrap());
+    assert_eq!(
+        config::discover(&deep).unwrap(),
+        path.canonicalize().unwrap()
+    );
     // A file path is accepted directly.
-    assert_eq!(config::discover(&path).unwrap(), path.canonicalize().unwrap());
+    assert_eq!(
+        config::discover(&path).unwrap(),
+        path.canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -168,13 +174,23 @@ fn launch_resolves_file_arguments_against_the_project_and_injects_the_environmen
     );
     let loaded = config::load(&path).unwrap();
     let launch = loaded.launch().unwrap();
-    assert_eq!(launch.argv[0], "node", "a program name with no separator stays for PATH");
+    assert_eq!(
+        launch.argv[0], "node",
+        "a program name with no separator stays for PATH"
+    );
     assert_eq!(
         launch.argv[1],
-        root.join("server.js").canonicalize().unwrap().display().to_string(),
+        root.join("server.js")
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string(),
         "a relative file argument is resolved against the project, not the invoking cwd"
     );
-    assert_eq!(launch.cwd.as_deref(), Some(root.canonicalize().unwrap().to_str().unwrap()));
+    assert_eq!(
+        launch.cwd.as_deref(),
+        Some(root.canonicalize().unwrap().to_str().unwrap())
+    );
     assert_eq!(
         launch.env.get("VERIDOC_ROOT").map(String::as_str),
         Some(root.canonicalize().unwrap().to_str().unwrap())

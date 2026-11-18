@@ -29,23 +29,35 @@ pub struct ResultDocument {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TreeNode {
     pub path: String,
-    pub anchor: Option<String>,
     pub audience: String,
     pub question: String,
     pub order: u32,
     pub not_applicable: Option<String>,
 }
 
-/// One parsed `.spec.md` section with the spans the engine issued and the claims it selected.
+/// One parsed `.spec.md` section with the spans the engine issued and the claims it names.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SectionResult {
     pub file: String,
-    pub anchor: String,
-    pub heading: String,
+    /// The subject from the section's opening element.
+    pub subject: String,
     pub spans: Vec<Span>,
-    /// The resolved claim ids the section selects.
-    pub selects: Vec<String>,
+    /// The resolved claim ids the section names.
+    pub claims: Vec<String>,
+    /// What each `<doc-each>` in the section pulled in, in document order: the element's source
+    /// and the number of values it resolved to at assembly.
+    pub injections: Vec<Injected>,
+}
+
+/// One `<doc-each>` element with the number of values it resolved to. The injected text is already
+/// in the spans above; this names the element that put it there, which is what a reader of a re-run
+/// with no prose diff needs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Injected {
+    pub source: String,
+    pub items: usize,
 }
 
 /// One authored span. Span ids are assigned by the engine at assembly time; a verdict citing
@@ -128,7 +140,8 @@ pub fn write_result(root: &Path, doc: &ResultDocument) -> Result<String, std::io
     let hash = result_hash(doc);
     let mut finished = doc.clone();
     finished.generated_at = iso8601_now();
-    let bytes = serde_json::to_string_pretty(&finished).expect("the result document is serializable")
+    let bytes = serde_json::to_string_pretty(&finished)
+        .expect("the result document is serializable")
         + "\n";
     let dir = root.join(crate::config::CONFIG_DIR);
     std::fs::create_dir_all(&dir)?;

@@ -7,8 +7,6 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use serde_json::Value;
-use serde::de::DeserializeOwned;
 use crate::artefact;
 use crate::bind::{self, BindFailure, Bound, BoundChannel, BoundClaim, CollectWire};
 use crate::bivalence;
@@ -24,6 +22,8 @@ use crate::judge::{AnthropicJudge, CommandJudge, Judge, JudgeError};
 use crate::plugin::PluginClient;
 use crate::result::{self, ClaimResult, Metrics, Outcome as DocOutcome, ResultDocument};
 use crate::verdicts;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 use veridoc_protocol::{Call, Capability, Kind, Method, RunFailureKind};
 
 /// What the CLI prints and exits with.
@@ -47,7 +47,11 @@ impl Report {
         }
     }
     fn findings(diagnostics: Vec<Diagnostic>) -> Self {
-        Self { exit: 1, diagnostics, result_written: false }
+        Self {
+            exit: 1,
+            diagnostics,
+            result_written: false,
+        }
     }
 }
 
@@ -136,9 +140,7 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
             return Report::run_failure(client.with_fault(&format!("run failed: plugin: {why}")));
         }
         Err(BindFailure::Errors(errors)) => {
-            return Report::findings(
-                errors.iter().map(bind_error_diagnostic).collect::<Vec<_>>(),
-            );
+            return Report::findings(errors.iter().map(bind_error_diagnostic).collect::<Vec<_>>());
         }
     };
     if let Some(report) = interrupted("gates") {
@@ -147,17 +149,17 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
 
     // 4. The derivability ban. Rejections are warnings, not findings.
     let mut warnings: Vec<crate::result::Warning> = bound.warnings.clone();
-    let derived = match derivability::gate(
-        bound.claims.clone(),
-        &handshake.name,
-        &caps,
-        |referent| client.derivable(referent),
-    ) {
-        Ok(outcome) => outcome,
-        Err(detail) => {
-            return Report::run_failure(client.with_fault(&format!("run failed: plugin: {detail}")))
-        }
-    };
+    let derived =
+        match derivability::gate(bound.claims.clone(), &handshake.name, &caps, |referent| {
+            client.derivable(referent)
+        }) {
+            Ok(outcome) => outcome,
+            Err(detail) => {
+                return Report::run_failure(
+                    client.with_fault(&format!("run failed: plugin: {detail}")),
+                )
+            }
+        };
     for rejected in &derived.rejected {
         warnings.push(crate::result::Warning {
             file: Some(rejected.file.clone()),
@@ -179,8 +181,11 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
             return Report::run_failure(client.with_fault(&format!("run failed: plugin: {detail}")))
         }
     };
-    let mut errors: Vec<Diagnostic> =
-        classified.errors.iter().map(bind_error_diagnostic).collect();
+    let mut errors: Vec<Diagnostic> = classified
+        .errors
+        .iter()
+        .map(bind_error_diagnostic)
+        .collect();
     let claims = classified.claims;
     if let Some(report) = interrupted("execution") {
         return report;
@@ -198,15 +203,17 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
                 RunFailureKind::Plugin => "plugin",
                 RunFailureKind::Deadline => "deadline",
             };
-            return Report::run_failure(client.with_fault(&format!(
-                "run failed: {kind}: {}",
-                failure.detail
-            )));
+            return Report::run_failure(
+                client.with_fault(&format!("run failed: {kind}: {}", failure.detail)),
+            );
         }
     };
     let mut outcomes: Vec<OutcomeOf> = Vec::new();
     for done in &executed {
-        let claim = claims.iter().find(|c| c.id == done.claim_id).expect("executed claim");
+        let claim = claims
+            .iter()
+            .find(|c| c.id == done.claim_id)
+            .expect("executed claim");
         match done.outcome {
             Outcome::Supported => outcomes.push(OutcomeOf {
                 claim,
@@ -234,7 +241,10 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
 
     // 7. The artefact channel.
     for verified in artefact::verify(&claims, root) {
-        let claim = claims.iter().find(|c| c.id == verified.claim_id).expect("verified claim");
+        let claim = claims
+            .iter()
+            .find(|c| c.id == verified.claim_id)
+            .expect("verified claim");
         match verified.outcome {
             Outcome::Supported => outcomes.push(OutcomeOf {
                 claim,
@@ -243,11 +253,9 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
                 channel: "artefact",
                 evidence: artefact_path_of(claim),
             }),
-            Outcome::Contradicted => errors.push(Diagnostic::error(
-                &claim.file,
-                claim.line,
-                verified.detail,
-            )),
+            Outcome::Contradicted => {
+                errors.push(Diagnostic::error(&claim.file, claim.line, verified.detail))
+            }
         }
     }
 
@@ -260,14 +268,15 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
         &claims,
         |citations| client.cite(citations),
         |claim, text| {
-            judge_citation(judge_client.as_ref(), root, config, claim, text)
-                .unwrap_or_else(|detail| {
+            judge_citation(judge_client.as_ref(), root, config, claim, text).unwrap_or_else(
+                |detail| {
                     RUN_FAILURE.with(|slot| {
                         *slot.borrow_mut() = Some(detail.clone());
                     });
                     // The value is ignored once the slot is set; the run stops below.
                     Outcome::Supported
-                })
+                },
+            )
         },
     ) {
         Ok(outcome) => outcome,
@@ -283,7 +292,10 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
     }
     warnings.extend(cited.warnings.iter().cloned());
     for done in &cited.cited {
-        let claim = claims.iter().find(|c| c.id == done.claim_id).expect("cited claim");
+        let claim = claims
+            .iter()
+            .find(|c| c.id == done.claim_id)
+            .expect("cited claim");
         outcomes.push(OutcomeOf {
             claim,
             outcome: match done.outcome {
@@ -302,13 +314,15 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
     // 9. Briefs and the judge, per section and for the index, with the verdict cache.
     let mut judged_sections: Vec<String> = Vec::new();
     for section in &bound.sections {
-        if section.selects.is_empty() {
+        if section.claims.is_empty() {
             continue;
         }
-        let selected: Vec<&BoundClaim> =
-            claims.iter().filter(|c| section.selects.contains(&c.id)).collect();
-        let brief = section_brief(Task::S1, &bound, section, &selected, &outcomes);
-        let ids = brief_cache_ids(&selected, &section.body);
+        let named: Vec<&BoundClaim> = claims
+            .iter()
+            .filter(|c| section.claims.contains(&c.id))
+            .collect();
+        let brief = section_brief(Task::S1, &bound, section, &named, &outcomes);
+        let ids = brief_cache_ids(&named, &section.body);
         match judge_task(
             Task::S1,
             &JudgeRun {
@@ -327,17 +341,15 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
                         file: Some(section.file.clone()),
                         line: Some(section.line),
                         message: format!(
-                            "span {} states an assertion no selected claim states: {}",
+                            "span {} states an assertion no named claim states: {}",
                             unstated.span, unstated.text
                         ),
                     });
                 }
             }
-            Err(detail) => {
-                return Report::run_failure(format!("run failed: judge: {detail}"))
-            }
+            Err(detail) => return Report::run_failure(format!("run failed: judge: {detail}")),
         }
-        let brief = section_brief(Task::S2, &bound, section, &selected, &outcomes);
+        let brief = section_brief(Task::S2, &bound, section, &named, &outcomes);
         match judge_task(
             Task::S2,
             &JudgeRun {
@@ -351,7 +363,7 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
             |j, b| j.s2(b),
         ) {
             Ok(verdict) => {
-                judged_sections.extend(section.selects.iter().cloned());
+                judged_sections.extend(section.claims.iter().cloned());
                 for pair in &verdict.pairs {
                     errors.push(Diagnostic::error(
                         &section.file,
@@ -363,14 +375,12 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
                     ));
                 }
             }
-            Err(detail) => {
-                return Report::run_failure(format!("run failed: judge: {detail}"))
-            }
+            Err(detail) => return Report::run_failure(format!("run failed: judge: {detail}")),
         }
     }
 
-    // 10. A judge-channel claim is evaluated only by the S1 and S2 of a section that
-    //     selected it; without a section it has no verdict.
+    // 10. A judge-channel claim is evaluated only by the S1 and S2 of the sections that
+    //     name it; without a section naming it, it has no verdict.
     for claim in &claims {
         if matches!(claim.channel, BoundChannel::Judge) && !judged_sections.contains(&claim.id) {
             errors.push(Diagnostic::error(
@@ -404,7 +414,10 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
                 warnings.push(crate::result::Warning {
                     file: None,
                     line: None,
-                    message: format!("nodes {} and {} ask the same thing", pair.node_a, pair.node_b),
+                    message: format!(
+                        "nodes {} and {} ask the same thing",
+                        pair.node_a, pair.node_b
+                    ),
                 });
             }
         }
@@ -451,9 +464,9 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
                 ))
             }
             Call::Lost(lost) => {
-                return Report::run_failure(client.with_fault(&format!(
-                    "run failed: plugin: {lost}"
-                )))
+                return Report::run_failure(
+                    client.with_fault(&format!("run failed: plugin: {lost}")),
+                )
             }
         }
     } else {
@@ -464,7 +477,13 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
     }
 
     // 14. Metrics and the coverage gate.
-    let metrics = compute_metrics(&claims, &outcomes, &bound, &warnings, derived.rejected.len());
+    let metrics = compute_metrics(
+        &claims,
+        &outcomes,
+        &bound,
+        &warnings,
+        derived.rejected.len(),
+    );
     if metrics.coverage < config.coverage.required {
         errors.push(Diagnostic {
             file: None,
@@ -478,7 +497,10 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
     }
     for node in &bound.documents {
         if node.not_applicable.is_none()
-            && !bound.sections.iter().any(|s| s.file == node.path && !s.selects.is_empty())
+            && !bound
+                .sections
+                .iter()
+                .any(|s| s.file == node.path && !s.claims.is_empty())
         {
             errors.push(Diagnostic {
                 file: Some(node.path.clone()),
@@ -504,14 +526,22 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
     };
     if skipped {
         eprintln!("documentation up to date; formatters skipped");
-        return Report { exit: 0, diagnostics: warning_diagnostics(&warnings), result_written: written };
+        return Report {
+            exit: 0,
+            diagnostics: warning_diagnostics(&warnings),
+            result_written: written,
+        };
     }
     if let Err(detail) =
         format::dispatch(root, config, &document, &root.join(".veridoc/result.json"))
     {
         return Report::run_failure(format!("run failed: formatter: {detail}"));
     }
-    Report { exit: 0, diagnostics: warning_diagnostics(&warnings), result_written: written }
+    Report {
+        exit: 0,
+        diagnostics: warning_diagnostics(&warnings),
+        result_written: written,
+    }
 }
 
 fn bind_error_diagnostic(error: &bind::BindError) -> Diagnostic {
@@ -519,9 +549,7 @@ fn bind_error_diagnostic(error: &bind::BindError) -> Diagnostic {
     Diagnostic::error(file, line, error.to_string())
 }
 
-fn warning_diagnostics(
-    warnings: &[crate::result::Warning],
-) -> Vec<Diagnostic> {
+fn warning_diagnostics(warnings: &[crate::result::Warning]) -> Vec<Diagnostic> {
     warnings
         .iter()
         .map(|w| Diagnostic::warning(w.file.clone(), w.line, w.message.clone()))
@@ -605,8 +633,14 @@ fn judge_citation(
         audience: None,
         question: None,
         spans: vec![
-            BriefSpan { id: "sp1".into(), text: claim.text.clone() },
-            BriefSpan { id: "sp2".into(), text: cited_text.to_string() },
+            BriefSpan {
+                id: "sp1".into(),
+                text: claim.text.clone(),
+            },
+            BriefSpan {
+                id: "sp2".into(),
+                text: cited_text.to_string(),
+            },
         ],
         claims: vec![brief_claim(claim, "citation")],
         nodes: vec![],
@@ -651,8 +685,10 @@ fn judge_ids_for(claims: &[&BoundClaim], body: &str) -> (String, String, String)
         })
         .collect();
     let set = hash::claim_set_hash(&mut per_claim);
-    let mut entries: Vec<String> =
-        claims.iter().map(|c| format!("{}\t{}", c.referent_id, c.signature)).collect();
+    let mut entries: Vec<String> = claims
+        .iter()
+        .map(|c| format!("{}\t{}", c.referent_id, c.signature))
+        .collect();
     let revision = hash::referent_revision(&mut entries);
     (section, set, revision)
 }
@@ -729,7 +765,7 @@ fn brief_claim(claim: &BoundClaim, channel: &str) -> BriefClaim {
         kind: kind_text(claim.kind).to_string(),
         outcome: outcome.to_string(),
         text: claim.text.clone(),
-        subject: claim.referent_id.clone(),
+        subject: claim.subject.clone(),
         signature: claim.signature.clone(),
         asserts: match &claim.channel {
             BoundChannel::Scenario { asserts, .. } => crate::brief::render_asserts(asserts),
@@ -742,21 +778,24 @@ fn section_brief(
     task: Task,
     bound: &Bound,
     section: &bind::BoundSection,
-    selected: &[&BoundClaim],
+    named: &[&BoundClaim],
     outcomes: &[OutcomeOf],
 ) -> Brief {
     let document = bound.documents.iter().find(|d| d.path == section.file);
     Brief {
         task,
-        section: format!("{}#{}", section.file, section.anchor),
+        section: format!("{}#{}", section.file, section.subject),
         audience: document.map(|d| d.audience.clone()),
         question: document.map(|d| d.question.clone()),
         spans: section
             .spans
             .iter()
-            .map(|s| BriefSpan { id: s.id.clone(), text: s.text.clone() })
+            .map(|s| BriefSpan {
+                id: s.id.clone(),
+                text: s.text.clone(),
+            })
             .collect(),
-        claims: selected
+        claims: named
             .iter()
             .map(|c| {
                 let mut brief = brief_claim(
@@ -812,9 +851,14 @@ fn compute_metrics(
     redundancy: usize,
 ) -> Metrics {
     let bucket = |kind: &str| -> (usize, usize) {
-        let in_bucket: Vec<&OutcomeOf> =
-            outcomes.iter().filter(|o| bucket_of(o.claim) == kind).collect();
-        let supported = in_bucket.iter().filter(|o| o.outcome == DocOutcome::Supported).count();
+        let in_bucket: Vec<&OutcomeOf> = outcomes
+            .iter()
+            .filter(|o| bucket_of(o.claim) == kind)
+            .collect();
+        let supported = in_bucket
+            .iter()
+            .filter(|o| o.outcome == DocOutcome::Supported)
+            .count();
         (supported, in_bucket.len())
     };
     let (s_scn, t_scn) = bucket("scenario");
@@ -822,7 +866,11 @@ fn compute_metrics(
     let (s_jud, t_jud) = bucket("judge");
     let supported = s_scn + s_art + s_jud;
     let total = t_scn + t_art + t_jud;
-    let coverage = if total == 0 { 1.0 } else { supported as f64 / total as f64 };
+    let coverage = if total == 0 {
+        1.0
+    } else {
+        supported as f64 / total as f64
+    };
     let coverage_detail = format!(
         "{:.3} ({}/{} supported; scenario {}/{}, artefact {}/{}, judge {}/{})",
         coverage, supported, total, s_scn, t_scn, s_art, t_art, s_jud, t_jud
@@ -840,7 +888,11 @@ fn compute_metrics(
             }
         }
     }
-    let custom_logic = if leaves == 0 { 0.0 } else { custom as f64 / leaves as f64 };
+    let custom_logic = if leaves == 0 {
+        0.0
+    } else {
+        custom as f64 / leaves as f64
+    };
 
     let residue = outcomes.iter().filter(|o| o.residue).count();
     let obligation = bound
@@ -848,12 +900,15 @@ fn compute_metrics(
         .iter()
         .filter(|d| {
             d.not_applicable.is_none()
-                && !bound.sections.iter().any(|s| s.file == d.path && !s.selects.is_empty())
+                && !bound
+                    .sections
+                    .iter()
+                    .any(|s| s.file == d.path && !s.claims.is_empty())
         })
         .count();
     let unmatched_prose = warnings
         .iter()
-        .filter(|w| w.message.contains("assertion no selected claim states"))
+        .filter(|w| w.message.contains("assertion no named claim states"))
         .count();
 
     Metrics {
@@ -898,7 +953,6 @@ fn build_document(
             .enumerate()
             .map(|(i, d)| result::TreeNode {
                 path: d.path.clone(),
-                anchor: None,
                 audience: d.audience.clone(),
                 question: d.question.clone(),
                 order: i as u32,
@@ -910,14 +964,24 @@ fn build_document(
             .iter()
             .map(|s| result::SectionResult {
                 file: s.file.clone(),
-                anchor: s.anchor.clone(),
-                heading: s.heading.clone(),
+                subject: s.subject.clone(),
                 spans: s
                     .spans
                     .iter()
-                    .map(|sp| result::Span { id: sp.id.clone(), text: sp.text.clone() })
+                    .map(|sp| result::Span {
+                        id: sp.id.clone(),
+                        text: sp.text.clone(),
+                    })
                     .collect(),
-                selects: s.selects.clone(),
+                claims: s.claims.clone(),
+                injections: s
+                    .injections
+                    .iter()
+                    .map(|pulled| result::Injected {
+                        source: pulled.source.clone(),
+                        items: pulled.items,
+                    })
+                    .collect(),
             })
             .collect(),
         claims: claims

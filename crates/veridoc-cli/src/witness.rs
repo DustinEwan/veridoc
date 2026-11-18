@@ -13,7 +13,7 @@ use veridoc_engine::hash;
 use veridoc_engine::plugin::{sentence, PluginClient};
 use veridoc_protocol::Method;
 
-pub fn run(project: &Path, claim_id: &str) -> Result<i32, String> {
+pub fn run(project: &Path, claim_name: &str) -> Result<i32, String> {
     let path = config::discover(project).map_err(|e| e.to_string())?;
     let loaded = config::load(&path).map_err(|e| e.to_string())?;
     let root = &loaded.root;
@@ -44,32 +44,14 @@ pub fn run(project: &Path, claim_id: &str) -> Result<i32, String> {
     };
     let collect: CollectWire = serde_json::from_value(raw).map_err(|e| e.to_string())?;
 
-    let mut keys: Vec<String> = Vec::new();
     for claim in &collect.claims {
-        let key = claim.subject.key();
-        if !keys.contains(&key) {
-            keys.push(key);
-        }
-    }
-    let resolved = match sentence("resolve", client.resolve(&keys)) {
-        Ok(resolved) => resolved,
-        Err(why) => {
-            eprintln!("run failed: plugin: {why}");
-            return Ok(2);
-        }
-    };
-
-    for claim in &collect.claims {
-        let Some(reference) =
-            resolved.resolved.iter().find(|r| r.reference == claim.subject.key())
-        else {
-            continue;
-        };
-        if hash::claim_id(&reference.referent_id, &claim.predicate) != claim_id {
+        if hash::claim_name(claim.subject.subject_name(), &claim.predicate) != claim_name {
             continue;
         }
         let Some(artefact) = &claim.channel.artefact else {
-            return Err(format!("claim {claim_id} does not carry an artefact channel"));
+            return Err(format!(
+                "claim {claim_name} does not carry an artefact channel"
+            ));
         };
         return match sha256_of(root, &artefact.path) {
             Ok(digest) => {
@@ -79,5 +61,7 @@ pub fn run(project: &Path, claim_id: &str) -> Result<i32, String> {
             Err(why) => Err(why),
         };
     }
-    Err(format!("no claim {claim_id} in this project"))
+    Err(format!(
+        "no claim {claim_name} in this project; a claim is named <subject>#<predicate>, as the report prints it"
+    ))
 }

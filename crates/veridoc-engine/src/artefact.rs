@@ -6,8 +6,8 @@
 use std::path::Path;
 
 use crate::bind::{BoundChannel, BoundClaim};
-use crate::hash::hex64;
 use crate::execute::Outcome;
+use crate::hash::hex64;
 
 /// One artefact claim after its file was re-hashed.
 #[derive(Debug, Clone)]
@@ -42,16 +42,12 @@ pub fn verify(claims: &[BoundClaim], root: &Path) -> Vec<Verified> {
             Ok(actual) => verified.push(Verified {
                 claim_id: claim.id.clone(),
                 outcome: Outcome::Contradicted,
-                detail: format!(
-                    "artefact {path} hashes to {actual}, the claim records {sha256}"
-                ),
+                detail: format!("artefact {path} hashes to {actual}, the claim records {sha256}"),
             }),
             Err(_) => verified.push(Verified {
                 claim_id: claim.id.clone(),
                 outcome: Outcome::Contradicted,
-                detail: format!(
-                    "artefact {path} hashes to missing, the claim records {sha256}"
-                ),
+                detail: format!("artefact {path} hashes to missing, the claim records {sha256}"),
             }),
         }
     }

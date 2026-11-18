@@ -93,7 +93,11 @@ pub fn parse(path: &str, text: &str) -> (FeatureFile, Vec<FeatureProblem>) {
             flush(&mut current, &mut scenarios);
             let name = rest.trim();
             if name.is_empty() {
-                problems.push(problem(path, line_no, FeatureProblemKind::Empty("scenario name".into())));
+                problems.push(problem(
+                    path,
+                    line_no,
+                    FeatureProblemKind::Empty("scenario name".into()),
+                ));
             }
             let id = match pending_tag.take() {
                 Some(slug) => slug,

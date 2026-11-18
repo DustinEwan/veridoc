@@ -12,8 +12,11 @@ pub fn run(project: &Path) -> Result<i32, String> {
         return Err(format!("{} already exists", config_path.display()));
     }
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    std::fs::write(&config_path, serde_json::to_string_pretty(&Config::default()).unwrap() + "\n")
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&Config::default()).unwrap() + "\n",
+    )
+    .map_err(|e| e.to_string())?;
     std::fs::write(
         dir.join(".gitignore"),
         "result.json\nlast-result-hash\nout/\nengine.log\nverdicts/\n",

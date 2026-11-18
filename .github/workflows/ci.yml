@@ -19,7 +19,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
+
+      # Formatting is a gate, not a courtesy: `decl.rs` and friends carried rustfmt
+      # deviations at HEAD because nothing here asked.
+      - name: Formatting
+        run: cargo fmt --all --check
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -66,7 +71,7 @@ jobs:
 
   # The wire contract, checked by the published mechanism runner rather than by this
   # repository's own binary: `prpc-core` installed from crates.io drives the fake plugin
-  # through the six wire rules, then runs each scripted defect in `vd-1.profile.json` and
+  # through the six wire rules, then runs each scripted defect in `veridoc-1.profile.json` and
   # takes the profile's `verified` mark away from any rule whose defect did not fire. The
   # profile rules themselves still run through `veridoc validate-plugin --out`, because they
   # read the fixture the plugin's emitter renders.
@@ -90,8 +95,8 @@ jobs:
             '  "name": "veridoc-fakeplugin",' \
             '  "command": ["'"$PWD"'/target/release/veridoc-fakeplugin"],' \
             '  "conformance": { "emitter": ["'"$PWD"'/target/release/veridoc-fakeplugin", "--emit-conformance"] }' \
-            '}' > /tmp/vd-harness.json
-          prpc-core vd-1.profile.json /tmp/vd-harness.json --suite
+            '}' > /tmp/veridoc-harness.json
+          prpc-core veridoc-1.profile.json /tmp/veridoc-harness.json --suite
 
   # `curl | sh` runs this file with sh, which is dash on Debian and Ubuntu, so a bashism
   # breaks the installer silently. shellcheck plus a real dash parse is the gate.

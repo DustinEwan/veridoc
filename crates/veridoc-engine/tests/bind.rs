@@ -1,5 +1,5 @@
 //! The bind stage, rule by rule: each row of the paths table in `docs/spec.md` produces its
-//! exact message, and a conforming project binds with the selection resolved and no errors.
+//! exact message, and a conforming project binds with its references resolved and no errors.
 
 use std::path::{Path, PathBuf};
 
@@ -9,7 +9,8 @@ use veridoc_protocol::{Call, Loss, UNUSABLE_RESULT};
 use veridoc_protocol::{Capability, ResolveResult};
 
 fn tmp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("vd-engine-bind-{}-{name}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("veridoc-engine-bind-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir.canonicalize().unwrap()
@@ -21,11 +22,11 @@ fn write(root: &Path, rel: &str, content: &str) {
     std::fs::write(path, content).unwrap();
 }
 
-const SPEC: &str = "# Architecture\n\
+const SPEC: &str = "<doc-section name=\"probe\">\n\
     \n\
-    ## What the scanner refuses {#refuses selects=\"concept:project-scan\"}\n\
+    ## What the scanner refuses\n\
     \n\
-    The scanner walks upward and stops at the first project root.\n";
+    The scanner walks upward and stops at the first project root <doc-claim name=\"rejects-missing-project-root\"/>.\n";
 
 const FEATURE: &str = "Feature: project scan\n\
     \n\
@@ -42,8 +43,10 @@ fn scaffold(name: &str) -> PathBuf {
 }
 
 fn collect() -> CollectWire {
-    serde_json::from_value(veridoc_fakeplugin::default_collect(&serde_json::Value::Null))
-        .expect("default collect")
+    serde_json::from_value(veridoc_fakeplugin::default_collect(
+        &serde_json::Value::Null,
+    ))
+    .expect("default collect")
 }
 
 fn all_capabilities() -> Vec<Capability> {
@@ -62,16 +65,15 @@ fn resolve_default(keys: &[String]) -> Call<ResolveResult> {
     let value = veridoc_fakeplugin::default_resolve(&json!({ "refs": keys }));
     serde_json::from_value(value)
         .map(Call::Result)
-        .unwrap_or_else(|e| Call::Lost(Loss::Profile {
-            reason: UNUSABLE_RESULT.to_string(),
-            detail: e.to_string(),
-        }))
+        .unwrap_or_else(|e| {
+            Call::Lost(Loss::Profile {
+                reason: UNUSABLE_RESULT.to_string(),
+                detail: e.to_string(),
+            })
+        })
 }
 
-fn run(
-    root: &Path,
-    collect: CollectWire,
-) -> Result<veridoc_engine::bind::Bound, BindFailure> {
+fn run(root: &Path, collect: CollectWire) -> Result<veridoc_engine::bind::Bound, BindFailure> {
     bind::bind(
         root,
         "veridoc-fakeplugin",
@@ -91,31 +93,44 @@ fn diagnostics(result: Result<veridoc_engine::bind::Bound, BindFailure>) -> Vec<
 }
 
 #[test]
-fn a_conforming_project_binds_with_the_selection_resolved() {
+fn a_conforming_project_binds_with_the_references_resolved() {
     let root = scaffold("ok");
     let bound = run(&root, collect()).expect("the default project binds");
     assert_eq!(bound.claims.len(), 1);
-    assert_eq!(bound.claims[0].referent_id, "vd:r:probe");
-    assert_eq!(bound.claims[0].id, {
-        // Identity is the resolved referent joined with the predicate, hashed.
-        veridoc_engine::hash::claim_id("vd:r:probe", "rejects-missing-project-root")
-    });
+    assert_eq!(bound.claims[0].referent_id, "veridoc:referent:probe");
+    assert_eq!(
+        bound.claims[0].id,
+        // The name is the section subject joined with the predicate the author wrote
+        // (`docs/spec.md:152-158`).
+        "probe#rejects-missing-project-root"
+    );
     let section = bound
         .sections
         .iter()
-        .find(|s| s.anchor == "refuses")
+        .find(|s| s.subject == "probe")
         .expect("the section");
-    assert_eq!(section.selects, vec![bound.claims[0].id.clone()]);
-    assert!(bound.warnings.is_empty(), "unexpected warnings: {:?}", bound.warnings);
+    assert_eq!(section.claims, vec![bound.claims[0].id.clone()]);
+    assert!(
+        bound.warnings.is_empty(),
+        "unexpected warnings: {:?}",
+        bound.warnings
+    );
 }
 
 #[test]
 fn an_undeclared_spec_file_is_reported_at_line_one() {
     let root = scaffold("undeclared");
-    write(&root, "docs/undeclared.spec.md", "# U\n\n## S {#s}\n\nnothing\n");
+    write(
+        &root,
+        "docs/undeclared.spec.md",
+        "<doc-section name=\"other\">\n\nnothing\n",
+    );
     let lines = diagnostics(run(&root, collect()));
     assert!(
-        lines.contains(&"docs/undeclared.spec.md:1: no document node in index.doc.ts declares this file".to_string()),
+        lines.contains(
+            &"docs/undeclared.spec.md:1: no document node in index.doc.ts declares this file"
+                .to_string()
+        ),
         "got {lines:?}"
     );
 }
@@ -160,8 +175,7 @@ fn a_second_claim_with_the_same_identity_names_the_owner() {
     assert_eq!(
         lines[0],
         "src/other.doc.ts:9: claim rejects-missing-project-root duplicates \
-         c{}, owned by src/cli.doc.ts:3"
-            .replace("c{}", &veridoc_engine::hash::claim_id("vd:r:probe", "rejects-missing-project-root"))
+         probe#rejects-missing-project-root, owned by src/cli.doc.ts:3"
     );
 }
 
@@ -191,7 +205,7 @@ fn a_scenario_acting_on_another_referent_is_an_error() {
     let lines = diagnostics(run(&root, wire));
     assert!(
         lines[0].starts_with(
-            "src/cli.doc.ts:3: scenario config/rejects-missing-root acts on src/cli.ts|other, not the claim's referent vd:r:probe"
+            "src/cli.doc.ts:3: scenario config/rejects-missing-root acts on src/cli.ts|other, not the claim's referent veridoc:referent:probe"
         ) || lines[0].starts_with(
             "src/cli.doc.ts:3: referent src/cli.ts|other does not resolve"
         ),
@@ -221,10 +235,7 @@ fn an_observable_the_action_cannot_produce_is_reported() {
     let lines = diagnostics(run(&root, wire));
     assert_eq!(
         lines[0],
-        format!(
-            "src/cli.doc.ts:3: claim {} reads observable exit.code, which action run-probe cannot produce",
-            veridoc_engine::hash::claim_id("vd:r:probe", "rejects-missing-project-root")
-        )
+        "src/cli.doc.ts:3: claim probe#rejects-missing-project-root reads observable exit.code, which action run-probe cannot produce"
     );
 }
 
@@ -256,18 +267,17 @@ fn a_scenario_without_its_tag_is_reported() {
 }
 
 #[test]
-fn a_section_without_an_id_is_reported() {
-    let root = scaffold("noid");
+fn a_section_with_no_subject_is_reported() {
+    let root = scaffold("nosubject");
     write(
         &root,
         "docs/architecture.spec.md",
-        "# Architecture\n\n## No id\n\nbody\n",
+        "<doc-section>\n\nbody\n",
     );
     let lines = diagnostics(run(&root, collect()));
     assert!(
-        lines
-            .iter()
-            .any(|l| l == "docs/architecture.spec.md:3: section has no id; add {#id}"),
+        lines.iter().any(|l| l
+            == "docs/architecture.spec.md:1: section opens with no subject; write <doc-section name=\"<subject>\">"),
         "got {lines:?}"
     );
 }
@@ -287,18 +297,6 @@ fn a_citation_naming_an_undeclared_store_is_reported() {
     assert_eq!(
         lines[0],
         "src/cli.doc.ts:3: citation names undeclared store tickets"
-    );
-}
-
-#[test]
-fn a_supports_link_to_a_missing_section_is_reported() {
-    let root = scaffold("supports");
-    let mut wire = collect();
-    wire.claims[0].supports = vec!["docs/architecture.spec.md#nope".into()];
-    let lines = diagnostics(run(&root, wire));
-    assert!(
-        lines[0].ends_with("supports docs/architecture.spec.md#nope, which does not exist"),
-        "got {lines:?}"
     );
 }
 
@@ -333,7 +331,10 @@ fn a_skipped_sidecar_is_a_run_failure_not_a_finding() {
     }];
     match run(&root, wire) {
         Err(BindFailure::RunFailure(why)) => {
-            assert_eq!(why, "sidecar src/broken.doc.ts did not import: import threw");
+            assert_eq!(
+                why,
+                "sidecar src/broken.doc.ts did not import: import threw"
+            );
         }
         other => panic!("expected a run failure, got {other:?}"),
     }
@@ -345,14 +346,20 @@ fn a_missing_bivalence_capability_makes_scenario_claims_errors() {
     let result = bind::bind(
         &root,
         "veridoc-fakeplugin",
-        &[Capability::Collect, Capability::Resolution, Capability::Execution],
+        &[
+            Capability::Collect,
+            Capability::Resolution,
+            Capability::Execution,
+        ],
         &[],
         collect(),
         resolve_default,
     );
     let lines = diagnostics(result);
     assert!(
-        lines[0].contains("cannot take the scenario channel: plugin \"veridoc-fakeplugin\" declares no bivalence"),
+        lines[0].contains(
+            "cannot take the scenario channel: plugin \"veridoc-fakeplugin\" declares no bivalence"
+        ),
         "got {lines:?}"
     );
 }
@@ -381,8 +388,9 @@ fn a_not_applicable_node_with_a_reason_is_satisfied() {
     let mut wire = collect();
     wire.documents[0].path = "docs/missing.spec.md".into();
     wire.documents[0].not_applicable = Some("no plugin-facing surface in v1".into());
-    // The notApplicable node no longer backs the default `supports` link; drop that link.
-    wire.claims[0].supports.clear();
+    // With no `.spec.md` file in the project, no section can name the default claim, so the
+    // claim leaves with the file (coverage rule, `0010`).
+    wire.claims.clear();
     std::fs::remove_file(root.join("docs/architecture.spec.md")).unwrap();
     match run(&root, wire) {
         Ok(bound) => assert!(bound.sections.is_empty()),
@@ -426,26 +434,260 @@ fn a_contains_over_a_number_observable_is_a_bind_error() {
 }
 
 #[test]
-fn a_section_selecting_nothing_and_an_unselected_claim_are_warnings() {
+fn a_section_that_names_no_claim_is_a_warning() {
     let root = scaffold("warn");
     write(
         &root,
         "docs/architecture.spec.md",
-        "# Architecture\n\n## Unrelated {#unrelated selects=\"concept:other\"}\n\nNothing selects this.\n",
+        "<doc-section name=\"probe\">\n\nThe root is refused <doc-claim name=\"rejects-missing-project-root\"/>.\n\
+         \n\
+         <doc-section name=\"layout\">\n\nHow the tree is arranged.\n",
     );
-    // The rewritten file no longer carries the anchor the default `supports` link names.
-    let mut wire = collect();
-    wire.claims[0].supports.clear();
-    let bound = run(&root, wire).expect("binds");
-    let messages: Vec<&str> = bound.warnings.iter().map(|w| w.message.as_str()).collect();
+    let bound = run(&root, collect()).expect("binds");
+    let warnings: Vec<(&str, u32, &str)> = bound
+        .warnings
+        .iter()
+        .map(|w| {
+            (
+                w.file.as_deref().unwrap_or_default(),
+                w.line.unwrap_or(0),
+                w.message.as_str(),
+            )
+        })
+        .collect();
     assert!(
-        messages
+        warnings
             .iter()
-            .any(|m| m.contains("section docs/architecture.spec.md#unrelated selects no claim")),
-        "got {messages:?}"
+            .any(|(file, line, message)| *file == "docs/architecture.spec.md"
+                && *line == 5
+                && *message == "the section names no claim"),
+        "got {warnings:?}"
     );
+}
+
+#[test]
+fn a_claim_no_section_names_stops_the_build() {
+    let root = scaffold("unnamed");
+    write(
+        &root,
+        "docs/architecture.spec.md",
+        "<doc-section name=\"layout\">\n\nHow the tree is arranged.\n",
+    );
+    let wire = collect();
+    let lines = diagnostics(run(&root, wire));
     assert!(
-        messages.iter().any(|m| m.contains("is selected by no section")),
-        "got {messages:?}"
+        lines.iter().any(|l| l
+            == "src/cli.doc.ts:3: claim probe#rejects-missing-project-root is named by no section"),
+        "got {lines:?}"
+    );
+}
+
+#[test]
+fn a_bare_reference_to_two_claims_that_slug_alike_is_ambiguous() {
+    let root = scaffold("ambiguous");
+    let mut wire = collect();
+    let mut second = wire.claims[0].clone();
+    second.predicate = "Rejects missing project root!".into();
+    second.file = "src/other.doc.ts".into();
+    second.line = 9;
+    wire.claims.push(second);
+    let lines = diagnostics(run(&root, wire));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("probe#rejects-missing-project-root matches 2 claims")),
+        "got {lines:?}"
+    );
+}
+
+#[test]
+fn two_predicates_that_slug_alike_keep_distinct_names() {
+    let root = scaffold("slugs");
+    let mut wire = collect();
+    let mut second = wire.claims[0].clone();
+    second.predicate = "Rejects missing project root!".into();
+    second.file = "src/other.doc.ts".into();
+    second.line = 9;
+    let predicates = [wire.claims[0].predicate.clone(), second.predicate.clone()];
+    wire.claims.push(second);
+    // A collided slug forces the suffixed spelling, so the document names each claim by it.
+    let written: Vec<String> = predicates
+        .iter()
+        .map(|predicate| {
+            let base = veridoc_engine::hash::claim_name("probe", predicate);
+            let identity = veridoc_engine::hash::claim_identity("probe", predicate);
+            format!(
+                "{}{}",
+                base.split_once('#').map(|(_, p)| p).unwrap_or_default(),
+                veridoc_engine::hash::suffix(&identity)
+            )
+        })
+        .collect();
+    write(
+        &root,
+        "docs/architecture.spec.md",
+        &format!(
+            "<doc-section name=\"probe\">\n\nBoth are refused <doc-claim name=\"{}\"/> and <doc-claim name=\"{}\"/>.\n",
+            written[0], written[1]
+        ),
+    );
+    let bound = run(&root, wire).expect("distinct identities bind under one slug");
+    let mut names: Vec<String> = bound.claims.iter().map(|c| c.id.clone()).collect();
+    names.sort();
+    assert_ne!(names[0], names[1], "one slug must not name two claims");
+    for name in &names {
+        assert!(
+            name.starts_with("probe#rejects-missing-project-root~"),
+            "a collided name carries its identity suffix: {name}"
+        );
+    }
+    assert_eq!(
+        bound.sections[0].claims,
+        vec![bound.claims[0].id.clone(), bound.claims[1].id.clone()],
+        "the document names both claims"
+    );
+}
+
+// `doc-each` assembly (`docs/decisions/0011-an-authored-placeholder-pulls-its-content-at-assembly.md`).
+
+/// The happy-path section with one `doc-each` over the project's observables.
+fn injected_spec(source: &str, block: &str) -> String {
+    format!(
+        "<doc-section name=\"probe\">\n\nThe probe refuses a missing root <doc-claim name=\"rejects-missing-project-root\"/>.\n\n<doc-each source=\"{source}\">\n{block}\n"
+    )
+}
+
+fn scaffold_spec(name: &str, spec: &str) -> PathBuf {
+    let root = tmp_dir(name);
+    write(&root, "docs/architecture.spec.md", spec);
+    write(&root, "features/cli.feature", FEATURE);
+    root
+}
+
+#[test]
+fn a_doc_each_repeats_its_block_once_per_value() {
+    let root = scaffold_spec(
+        "inject",
+        &injected_spec(
+            "observables",
+            "- <doc-value field=\"name\"/> is a <doc-value field=\"type\"/>",
+        ),
+    );
+    let bound = run(&root, collect()).expect("the injected project binds");
+    let section = bound
+        .sections
+        .iter()
+        .find(|s| s.subject == "probe")
+        .expect("the section binds");
+    assert_eq!(
+        section.injections,
+        vec![bind::Injected {
+            source: "observables".into(),
+            items: 2,
+        }],
+        "one element, two values"
+    );
+    let texts: Vec<&str> = section
+        .spans
+        .iter()
+        .map(|span| span.text.as_str())
+        .collect();
+    assert!(
+        texts.contains(&"- exit.code is a number") && texts.contains(&"- stderr.text is a string"),
+        "the spans the brief and the section hash read are the assembled ones: {texts:?}"
+    );
+}
+
+#[test]
+fn a_source_that_matches_nothing_stops_the_build() {
+    let root = scaffold_spec(
+        "inject-empty",
+        &injected_spec(
+            "observables",
+            "- <doc-value field=\"name\"/> is a <doc-value field=\"type\"/>",
+        ),
+    );
+    let mut wire = collect();
+    wire.observables.clear();
+    let lines = diagnostics(run(&root, wire));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.ends_with("doc-each source observables matched nothing")),
+        "got {lines:?}"
+    );
+}
+
+#[test]
+fn a_source_naming_no_collection_stops_the_build() {
+    let root = scaffold_spec(
+        "inject-source",
+        &injected_spec("widgets", "- <doc-value field=\"name\"/>"),
+    );
+    let lines = diagnostics(run(&root, collect()));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.ends_with("doc-each source widgets names no collection")),
+        "got {lines:?}"
+    );
+}
+
+#[test]
+fn a_field_the_collection_lacks_stops_the_build() {
+    let root = scaffold_spec(
+        "inject-field",
+        &injected_spec("observables", "- <doc-value field=\"colour\"/>"),
+    );
+    let lines = diagnostics(run(&root, collect()));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.ends_with("doc-each source observables has no field colour")),
+        "got {lines:?}"
+    );
+}
+
+#[test]
+fn a_bare_doc_value_over_an_unnamed_collection_stops_the_build() {
+    let root = scaffold_spec(
+        "inject-default",
+        &injected_spec("documents", "- <doc-value/>"),
+    );
+    let lines = diagnostics(run(&root, collect()));
+    assert!(
+        lines.iter().any(|line| line.contains(
+            "<doc-value> in doc-each source documents names no field, and documents items carry no name"
+        )),
+        "got {lines:?}"
+    );
+}
+
+#[test]
+fn a_doc_value_outside_a_block_stops_the_build() {
+    let root = scaffold_spec(
+        "inject-stray",
+        "<doc-section name=\"probe\">\n\nThe probe refuses a missing root <doc-claim name=\"rejects-missing-project-root\"/>, and a stray <doc-value/> lands nowhere.\n",
+    );
+    let lines = diagnostics(run(&root, collect()));
+    assert!(
+        lines.iter().any(|line| line
+            .ends_with("doc-value sits outside a doc-each block, where no value can land")),
+        "got {lines:?}"
+    );
+}
+
+#[test]
+fn a_doc_each_with_no_block_stops_the_build() {
+    let root = scaffold_spec(
+        "inject-block",
+        "<doc-section name=\"probe\">\n\nThe probe refuses a missing root <doc-claim name=\"rejects-missing-project-root\"/>.\n\n<doc-each source=\"observables\">\n",
+    );
+    let lines = diagnostics(run(&root, collect()));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.ends_with("doc-each has no block after it to repeat")),
+        "got {lines:?}"
     );
 }

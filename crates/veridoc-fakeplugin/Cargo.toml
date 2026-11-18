@@ -12,9 +12,6 @@ path = "src/main.rs"
 [dependencies]
 veridoc-protocol.workspace = true
 serde_json.workspace = true
-# The conformance profile recomputes claim ids exactly as the engine does; the engine's
-# `hash::claim_id` is the contract this copy is checked against.
-sha2.workspace = true
 
 [dev-dependencies]
 # Only for the claim-id drift test; the plugin itself must not depend on the engine.

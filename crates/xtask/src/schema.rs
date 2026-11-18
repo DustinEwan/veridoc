@@ -9,31 +9,97 @@ use std::path::Path;
 /// Write every protocol schema into the revision directory under `dir`. Returns the paths
 /// written, so callers compare layouts, not just contents.
 pub fn write_schemas(dir: &Path) -> Result<Vec<String>, String> {
-    let dir = dir.join(veridoc_protocol::schema_dir(veridoc_protocol::PROTOCOL_VERSION));
+    let dir = dir.join(veridoc_protocol::schema_dir(
+        veridoc_protocol::PROTOCOL_VERSION,
+    ));
     let dir: &Path = &dir;
     std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let mut written = Vec::new();
 
-    emit(dir, &mut written, "request", &schema_for!(veridoc_protocol::Request))?;
-    emit(dir, &mut written, "response", &schema_for!(veridoc_protocol::Response))?;
-    emit(dir, &mut written, "handshake", &schema_for!(veridoc_protocol::Handshake))?;
-    emit(dir, &mut written, "capability", &schema_for!(veridoc_protocol::Capability))?;
-    emit(dir, &mut written, "kind", &schema_for!(veridoc_protocol::Kind))?;
-    emit(dir, &mut written, "ref-token", &schema_for!(veridoc_protocol::RefToken))?;
-    emit(dir, &mut written, "channel", &schema_for!(veridoc_protocol::Channel))?;
-    emit(dir, &mut written, "raw-claim", &schema_for!(veridoc_protocol::RawClaim))?;
-    emit(dir, &mut written, "asserts", &schema_for!(veridoc_protocol::Asserts))?;
-    emit(dir, &mut written, "assert-leaf", &schema_for!(veridoc_protocol::AssertLeaf))?;
-    emit(dir, &mut written, "check", &schema_for!(veridoc_protocol::Check))?;
+    emit(
+        dir,
+        &mut written,
+        "request",
+        &schema_for!(veridoc_protocol::Request),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "response",
+        &schema_for!(veridoc_protocol::Response),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "handshake",
+        &schema_for!(veridoc_protocol::Handshake),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "capability",
+        &schema_for!(veridoc_protocol::Capability),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "kind",
+        &schema_for!(veridoc_protocol::Kind),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "ref-token",
+        &schema_for!(veridoc_protocol::RefToken),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "channel",
+        &schema_for!(veridoc_protocol::Channel),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "raw-claim",
+        &schema_for!(veridoc_protocol::RawClaim),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "asserts",
+        &schema_for!(veridoc_protocol::Asserts),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "assert-leaf",
+        &schema_for!(veridoc_protocol::AssertLeaf),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "check",
+        &schema_for!(veridoc_protocol::Check),
+    )?;
     emit(
         dir,
         &mut written,
         "satisfies-spec",
         &schema_for!(veridoc_protocol::SatisfiesSpec),
     )?;
-    emit(dir, &mut written, "artefact", &schema_for!(veridoc_protocol::Artefact))?;
-    emit(dir, &mut written, "citation", &schema_for!(veridoc_protocol::Citation))?;
-    emit(dir, &mut written, "selects", &schema_for!(veridoc_protocol::Selects))?;
+    emit(
+        dir,
+        &mut written,
+        "artefact",
+        &schema_for!(veridoc_protocol::Artefact),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "citation",
+        &schema_for!(veridoc_protocol::Citation),
+    )?;
     emit(
         dir,
         &mut written,
@@ -52,7 +118,12 @@ pub fn write_schemas(dir: &Path) -> Result<Vec<String>, String> {
         "action-decl",
         &schema_for!(veridoc_protocol::ActionDecl),
     )?;
-    emit(dir, &mut written, "skipped", &schema_for!(veridoc_protocol::Skipped))?;
+    emit(
+        dir,
+        &mut written,
+        "skipped",
+        &schema_for!(veridoc_protocol::Skipped),
+    )?;
     emit(
         dir,
         &mut written,
@@ -131,16 +202,36 @@ pub fn write_schemas(dir: &Path) -> Result<Vec<String>, String> {
         "cite-req",
         &schema_for!(veridoc_protocol::CiteReq),
     )?;
-    emit(dir, &mut written, "cite-result", &schema_for!(veridoc_protocol::CiteResult))?;
+    emit(
+        dir,
+        &mut written,
+        "cite-result",
+        &schema_for!(veridoc_protocol::CiteResult),
+    )?;
     emit(
         dir,
         &mut written,
         "surface-result",
         &schema_for!(veridoc_protocol::SurfaceResult),
     )?;
-    emit(dir, &mut written, "s1-verdict", &schema_for!(veridoc_protocol::S1Verdict))?;
-    emit(dir, &mut written, "s2-verdict", &schema_for!(veridoc_protocol::S2Verdict))?;
-    emit(dir, &mut written, "s3-verdict", &schema_for!(veridoc_protocol::S3Verdict))?;
+    emit(
+        dir,
+        &mut written,
+        "s1-verdict",
+        &schema_for!(veridoc_protocol::S1Verdict),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "s2-verdict",
+        &schema_for!(veridoc_protocol::S2Verdict),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "s3-verdict",
+        &schema_for!(veridoc_protocol::S3Verdict),
+    )?;
     // The result document is the engine's output, not a plugin message, but it is published
     // the same way: one file in `docs/schema/`, generated from the type that writes it.
     emit(

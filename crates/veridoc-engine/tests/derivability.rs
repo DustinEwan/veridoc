@@ -15,8 +15,8 @@ fn claim(text: &str) -> BoundClaim {
         text: text.into(),
         file: "src/cli.doc.ts".into(),
         line: 3,
-        supports: vec![],
-        referent_id: "vd:r:probe".into(),
+        subject: "probe".into(),
+        referent_id: "veridoc:referent:probe".into(),
         signature: "function probe(dir: string): number".into(),
         channel: veridoc_engine::bind::BoundChannel::Judge,
     }
@@ -62,7 +62,9 @@ fn a_verbatim_restatement_is_rejected_and_naming_the_fact() {
 #[test]
 fn a_claim_that_merely_names_a_parameter_is_kept() {
     let outcome = derivability::gate(
-        vec![claim("probe rejects a missing project root with a diagnostic.")],
+        vec![claim(
+            "probe rejects a missing project root with a diagnostic.",
+        )],
         "veridoc-fakeplugin",
         ALL_CAPS,
         |_| Call::Result(facts()),
@@ -74,8 +76,13 @@ fn a_claim_that_merely_names_a_parameter_is_kept() {
 
 #[test]
 fn the_ban_is_inert_without_the_capability() {
-    let outcome = derivability::gate(vec![claim("probe is exported from src/cli.ts.")], "p", &[], |_| Call::Result(facts()))
-        .expect("gate");
+    let outcome = derivability::gate(
+        vec![claim("probe is exported from src/cli.ts.")],
+        "p",
+        &[],
+        |_| Call::Result(facts()),
+    )
+    .expect("gate");
     assert_eq!(outcome.kept.len(), 1, "the inert ban rejects nothing");
     assert!(outcome.rejected.is_empty());
     assert!(outcome.inert);
@@ -83,12 +90,9 @@ fn the_ban_is_inert_without_the_capability() {
 
 #[test]
 fn a_plugin_error_is_a_run_failure_not_a_decision() {
-    let result = derivability::gate(
-        vec![claim("whatever")],
-        "p",
-        ALL_CAPS,
-        |_| Call::Lost(Loss::Eof),
-    );
+    let result = derivability::gate(vec![claim("whatever")], "p", ALL_CAPS, |_| {
+        Call::Lost(Loss::Eof)
+    });
     assert!(result.is_err(), "a lost plugin must stop the run");
 }
 

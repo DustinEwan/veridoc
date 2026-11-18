@@ -1,4 +1,4 @@
-//! `vd-1.profile.json` is the promise the profile makes; this file is what stops it from being
+//! `veridoc-1.profile.json` is the promise the profile makes; this file is what stops it from being
 //! an unkept one. It reads the published spec and pins it against the two tables the suite
 //! actually runs on — [`RULES`] and [`GATES`] — so a spec that declares a rule the driver does
 //! not drive, or a dependency the driver does not honour, fails here instead of reporting a rule
@@ -11,7 +11,7 @@ use plugin_rpc::conformance::{Defect, ProfileSpec};
 use veridoc_conformance::{GATES, RULES};
 
 fn spec() -> ProfileSpec {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vd-1.profile.json");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../veridoc-1.profile.json");
     ProfileSpec::load(&path)
         .unwrap_or_else(|e| panic!("{} is not a readable profile spec: {e}", path.display()))
 }

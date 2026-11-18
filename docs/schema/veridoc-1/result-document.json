@@ -113,6 +113,25 @@
         "evidence"
       ]
     },
+    "Injected": {
+      "description": "One `<doc-each>` element with the number of values it resolved to. The injected text is already\nin the spans above; this names the element that put it there, which is what a reader of a re-run\nwith no prose diff needs.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "items"
+      ]
+    },
     "Kind": {
       "description": "The five claim kinds. The distinction the kinds carry is normative against observational.",
       "type": "string",
@@ -185,23 +204,24 @@
       ]
     },
     "SectionResult": {
-      "description": "One parsed `.spec.md` section with the spans the engine issued and the claims it selected.",
+      "description": "One parsed `.spec.md` section with the spans the engine issued and the claims it names.",
       "type": "object",
       "properties": {
-        "anchor": {
-          "type": "string"
+        "claims": {
+          "description": "The resolved claim ids the section names.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "file": {
           "type": "string"
         },
-        "heading": {
-          "type": "string"
-        },
-        "selects": {
-          "description": "The resolved claim ids the section selects.",
+        "injections": {
+          "description": "What each `<doc-each>` in the section pulled in, in document order: the element's source\nand the number of values it resolved to at assembly.",
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/Injected"
           }
         },
         "spans": {
@@ -209,15 +229,19 @@
           "items": {
             "$ref": "#/$defs/Span"
           }
+        },
+        "subject": {
+          "description": "The subject from the section's opening element.",
+          "type": "string"
         }
       },
       "additionalProperties": false,
       "required": [
         "file",
-        "anchor",
-        "heading",
+        "subject",
         "spans",
-        "selects"
+        "claims",
+        "injections"
       ]
     },
     "Span": {
@@ -241,12 +265,6 @@
       "description": "One declared node of the document tree.",
       "type": "object",
       "properties": {
-        "anchor": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "audience": {
           "type": "string"
         },

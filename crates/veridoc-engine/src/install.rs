@@ -50,7 +50,10 @@ pub fn stage(url: &str, reference: Option<&str>) -> Result<Staged, String> {
 /// Run the manifest's `install` steps and then its `build` steps, with the checkout as the
 /// working directory. A step that exits non-zero stops the install; nothing is recorded.
 pub fn run_steps(staged: &Staged) -> Result<(), String> {
-    for (label, steps) in [("install", &staged.manifest.install), ("build", &staged.manifest.build)] {
+    for (label, steps) in [
+        ("install", &staged.manifest.install),
+        ("build", &staged.manifest.build),
+    ] {
         for argv in steps {
             run_step(label, &staged.path, argv)?;
         }

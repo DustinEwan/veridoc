@@ -108,7 +108,7 @@ impl Default for JudgeConfig {
             transport: "command".to_string(),
             command: None,
             model: None,
-            prompt_version: "vd-prompt-1".to_string(),
+            prompt_version: "veridoc-prompt-1".to_string(),
             timeout_ms: 120_000,
         }
     }
@@ -275,11 +275,9 @@ impl Config {
                         }
                     }
                 }
-                _ => {
-                    return Err(ConfigError::msg(
-                        "output.formatters entry must be a string or an object with name and command",
-                    ))
-                }
+                _ => return Err(ConfigError::msg(
+                    "output.formatters entry must be a string or an object with name and command",
+                )),
             }
         }
         Ok(out)
@@ -310,24 +308,19 @@ impl LoadedConfig {
     /// launch comes from the registry record for `plugin.name`; `validate()` has already
     /// rejected a name that is not installed.
     pub fn launch(&self) -> Result<Launch, ConfigError> {
-        let argv = match self
-            .config
-            .plugin
-            .command
-            .clone()
-            .filter(|a| !a.is_empty())
-        {
+        let argv = match self.config.plugin.command.clone().filter(|a| !a.is_empty()) {
             Some(argv) => argv,
-            None => match crate::plugins::launch(self.config.plugin.name.as_deref().unwrap_or(""))
-            {
-                Some(recorded) => recorded.argv,
-                None => {
-                    return Err(ConfigError::msg(format!(
+            None => {
+                match crate::plugins::launch(self.config.plugin.name.as_deref().unwrap_or("")) {
+                    Some(recorded) => recorded.argv,
+                    None => {
+                        return Err(ConfigError::msg(format!(
                         "`command` is required for plugin \"{}\". Install it with `veridoc install-plugin <git-url>`, or set `plugin.command`.",
                         self.config.plugin.name.as_deref().unwrap_or("")
                     )));
+                    }
                 }
-            },
+            }
         };
         Ok(self.launch_of(argv))
     }
@@ -357,16 +350,19 @@ impl LoadedConfig {
             .enumerate()
             .map(|(index, argument)| {
                 let probe_root = root.clone();
-                absolutized(index, argument, &root, move |path| probe_root.join(path).exists())
+                absolutized(index, argument, &root, move |path| {
+                    probe_root.join(path).exists()
+                })
             })
             .collect();
         let mut launch = Launch::new(argv);
         launch
             .env
             .insert("VERIDOC_ROOT".to_string(), self.root.display().to_string());
-        launch
-            .env
-            .insert("VERIDOC_CONFIG".to_string(), self.path.display().to_string());
+        launch.env.insert(
+            "VERIDOC_CONFIG".to_string(),
+            self.path.display().to_string(),
+        );
         launch.cwd = Some(self.root.display().to_string());
         launch
     }
@@ -445,12 +441,12 @@ pub fn discover(start: &Path) -> Result<PathBuf, ConfigError> {
 /// The `.veridoc/` skeleton `veridoc init` writes. The committed set is the config plus the
 /// citation stores; everything else the engine produces is ignored.
 pub fn init(dir: &Path) -> Result<(), ConfigError> {
-    let vd = dir.join(CONFIG_DIR);
-    std::fs::create_dir_all(&vd).map_err(|e| ConfigError::Read {
-        path: vd.clone(),
+    let cfg_dir = dir.join(CONFIG_DIR);
+    std::fs::create_dir_all(&cfg_dir).map_err(|e| ConfigError::Read {
+        path: cfg_dir.clone(),
         source: e,
     })?;
-    let config_path = vd.join(CONFIG_FILE_NAME);
+    let config_path = cfg_dir.join(CONFIG_FILE_NAME);
     if config_path.exists() {
         return Err(ConfigError::msg(format!(
             "{} already exists; not overwriting",
@@ -466,7 +462,7 @@ pub fn init(dir: &Path) -> Result<(), ConfigError> {
             "transport": "command",
             "command": ["node", "tools/judge.mjs"],
             "model": "scripted-1",
-            "promptVersion": "vd-prompt-1",
+            "promptVersion": "veridoc-prompt-1",
             "timeoutMs": 120_000
         },
         "output": { "dir": ".veridoc/out", "formatters": ["markdown"] },
@@ -481,11 +477,11 @@ pub fn init(dir: &Path) -> Result<(), ConfigError> {
         source: e,
     })?;
     std::fs::write(
-        vd.join(".gitignore"),
+        cfg_dir.join(".gitignore"),
         "result.json\nlast-result-hash\nout/\nengine.log\nverdicts/\n",
     )
     .map_err(|e| ConfigError::Read {
-        path: vd.join(".gitignore"),
+        path: cfg_dir.join(".gitignore"),
         source: e,
     })?;
     let index = dir.join("index.doc.ts");

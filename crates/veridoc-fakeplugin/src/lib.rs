@@ -18,21 +18,27 @@
 use std::io::{BufRead, Write};
 
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use veridoc_protocol::*;
 
-/// `c` + the first 16 hex characters of `sha256(referent_id + "\u{0}" + predicate)` — a copy
-/// of `veridoc_engine::hash::claim_id`. A plugin must recognise the claim ids the engine
-/// sends, and this mirrors what a real plugin re-implements in its own language; the
-/// `claim_id_matches_the_engine` test is the drift gate.
-pub fn claim_id(referent_id: &str, predicate: &str) -> String {
-    let mut bytes = Vec::with_capacity(referent_id.len() + predicate.len() + 2);
-    bytes.extend_from_slice(referent_id.as_bytes());
-    bytes.push(0);
-    bytes.extend_from_slice(predicate.as_bytes());
-    let digest = Sha256::digest(&bytes);
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    format!("c{}", &hex[..16])
+/// `<subject>#<predicate slug>` — a copy of `veridoc_engine::hash::claim_name`. A plugin must
+/// recognise the claim ids the engine sends, and this mirrors what a real plugin re-implements
+/// in its own language; the `claim_id_matches_the_engine` test is the drift gate. The subject is
+/// the author's name for the thing the claim is about, not a referent id
+/// (`docs/decisions/0009-the-subject-is-named-not-derived-from-a-path.md`).
+pub fn claim_name(subject: &str, predicate: &str) -> String {
+    let lowered = predicate.to_lowercase();
+    let mut words: Vec<&str> = Vec::new();
+    for word in lowered
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+    {
+        let width = words.iter().map(|w| w.len() + 1).sum::<usize>() + word.len();
+        if width > 48 {
+            break;
+        }
+        words.push(word);
+    }
+    format!("{}#{}", subject, words.join("-"))
 }
 
 /// The five bivalence probes: the four spec negatives and one positive, answered by table.
@@ -91,7 +97,6 @@ fn probe_claims() -> Vec<Value> {
                 "predicate": predicate,
                 "text": format!("The bivalence probe \"{predicate}\" settles as declared."),
                 "channel": {},
-                "supports": [],
                 "file": "src/cli.doc.ts",
                 "line": 4
             })
@@ -114,12 +119,15 @@ pub fn default_collect(req: &Value) -> Value {
             "scenario": "config/rejects-missing-root",
             "asserts": { "obs": "exit.code", "is": { "equals": 2 } }
         },
-        "supports": ["docs/architecture.spec.md#refuses"],
         "file": "src/cli.doc.ts",
         "line": 3
     })];
     let root = req["root"].as_str().unwrap_or_default();
-    if !root.is_empty() && std::path::Path::new(root).join("veridoc-conformance.json").is_file() {
+    if !root.is_empty()
+        && std::path::Path::new(root)
+            .join("veridoc-conformance.json")
+            .is_file()
+    {
         claims.extend(probe_claims());
     }
     json!({
@@ -127,8 +135,7 @@ pub fn default_collect(req: &Value) -> Value {
         "documents": [{
             "path": "docs/architecture.spec.md",
             "audience": "an author writing a new plugin",
-            "question": "What must my plugin answer, and in what order?",
-            "selects": { "concept": "project-scan" }
+            "question": "What must my plugin answer, and in what order?"
         }],
         "claims": claims,
         "observables": [
@@ -166,12 +173,12 @@ pub fn default_resolve(req: &Value) -> Value {
         match reference {
             "src/cli.ts|probe" => resolved.push(json!({
                 "ref": reference,
-                "referentId": "vd:r:probe",
+                "referentId": "veridoc:referent:probe",
                 "signature": "function probe(dir: string): number"
             })),
             "concept|project-scan" => resolved.push(json!({
                 "ref": reference,
-                "referentId": "vd:r:project-scan",
+                "referentId": "veridoc:referent:project-scan",
                 "signature": "concept project-scan"
             })),
             other => unresolved.push(json!({
@@ -199,7 +206,7 @@ pub fn default_derivable() -> Value {
 pub fn default_bivalence(req: &Value) -> Value {
     let claim = req["claimId"].as_str().unwrap_or_default();
     for (predicate, bivalent, method) in PROBES {
-        if claim_id("vd:r:probe", predicate) == claim {
+        if claim_name("probe", predicate) == claim {
             return json!({
                 "bivalent": bivalent,
                 "method": method,
@@ -244,7 +251,8 @@ pub fn default_cite(req: &Value) -> Value {
                 "state": "decided"
             }));
         } else {
-            unresolved.push(json!({ "id": id, "reason": format!("no citation {id} in store {store}") }));
+            unresolved
+                .push(json!({ "id": id, "reason": format!("no citation {id} in store {store}") }));
         }
     }
     json!({ "resolved": resolved, "unresolved": unresolved })
@@ -253,8 +261,8 @@ pub fn default_cite(req: &Value) -> Value {
 pub fn default_surface() -> Value {
     json!({
         "referents": [
-            { "referentId": "vd:r:probe", "name": "probe", "public": true },
-            { "referentId": "vd:r:helper", "name": "helper", "public": true }
+            { "referentId": "veridoc:referent:probe", "name": "probe", "public": true },
+            { "referentId": "veridoc:referent:helper", "name": "helper", "public": true }
         ]
     })
 }

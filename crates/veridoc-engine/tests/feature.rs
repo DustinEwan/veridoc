@@ -34,9 +34,9 @@ fn a_then_step_is_rejected_because_the_claim_owns_the_assertion() {
     let text = "Feature: f\n\n  @id:s\n  Scenario: has a then\n    Given x\n    When y\n    Then z holds\n";
     let (_file, problems) = feature::parse("features/c.feature", text);
     assert!(
-        problems
-            .iter()
-            .any(|p| matches!(&p.kind, FeatureProblemKind::ForbiddenStep(t) if t == "Then z holds")),
+        problems.iter().any(
+            |p| matches!(&p.kind, FeatureProblemKind::ForbiddenStep(t) if t == "Then z holds")
+        ),
         "expected a ForbiddenStep for the Then: {problems:?}"
     );
 }
@@ -46,11 +46,15 @@ fn a_second_given_and_a_second_when_are_problems() {
     let text = "Feature: f\n\n  @id:s\n  Scenario: two of each\n    Given a\n    Given b\n    When c\n    When d\n";
     let (_file, problems) = feature::parse("features/c.feature", text);
     assert!(
-        problems.iter().any(|p| p.kind == FeatureProblemKind::SecondGiven),
+        problems
+            .iter()
+            .any(|p| p.kind == FeatureProblemKind::SecondGiven),
         "expected SecondGiven: {problems:?}"
     );
     assert!(
-        problems.iter().any(|p| p.kind == FeatureProblemKind::SecondWhen),
+        problems
+            .iter()
+            .any(|p| p.kind == FeatureProblemKind::SecondWhen),
         "expected SecondWhen: {problems:?}"
     );
 }

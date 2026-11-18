@@ -10,7 +10,10 @@ use veridoc_engine::hash::hex64;
 use veridoc_protocol::Kind;
 
 fn tmp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("vd-engine-artefact-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "veridoc-engine-artefact-{}-{name}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir.canonicalize().unwrap()
@@ -25,8 +28,8 @@ fn artefact_claim(rel: &str, recorded: &str) -> BoundClaim {
         text: "The refusal was captured in this transcript.".into(),
         file: "src/cli.doc.ts".into(),
         line: 12,
-        supports: vec![],
-        referent_id: "vd:r:probe".into(),
+        subject: "probe".into(),
+        referent_id: "veridoc:referent:probe".into(),
         signature: "function probe(dir: string): number".into(),
         channel: BoundChannel::Artefact {
             path: rel.into(),

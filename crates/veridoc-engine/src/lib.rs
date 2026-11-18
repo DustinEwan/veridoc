@@ -6,23 +6,23 @@
 //! `tests/no_language_knowledge.rs` test asserts that boundary mechanically.
 
 pub mod artefact;
-pub mod bivalence;
 pub mod bind;
+pub mod bivalence;
 pub mod brief;
 pub mod cite;
 pub mod config;
-pub mod diagnostic;
-pub mod format;
 pub mod derivability;
+pub mod diagnostic;
 pub mod execute;
 pub mod feature;
+pub mod format;
 pub mod git;
 pub mod hash;
 pub mod install;
 pub mod judge;
+pub mod pipeline;
 pub mod plugin;
 pub mod plugins;
-pub mod pipeline;
 pub mod result;
 pub mod spec_md;
 pub mod verdicts;

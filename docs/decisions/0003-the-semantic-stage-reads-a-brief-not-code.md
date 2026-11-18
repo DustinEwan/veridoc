@@ -8,7 +8,7 @@ Status: accepted, 2026-11-16. Amended the same day: the artifact a model reads i
 Two analyses run over the same claims. The first is deterministic: does a referent resolve, does the claim
 restate something visible in a declaration, does the document tree still hold its obligations, does the
 assertion attached to a claim hold over the values that a scenario produced. The second is semantic: does the
-prose appear to mean what it is taken to mean, is it supported by the claims it selects, is it broader than
+prose appear to mean what it is taken to mean, is it supported by the claims it names, is it broader than
 those claims.
 
 The two stages need opposite representations. A program reads a structure best, so the deterministic stage
@@ -25,15 +25,17 @@ cache on, so every run spends model calls again.
 
 veridoc runs the two stages against two artifacts with two audiences.
 
-The deterministic stage consumes the sidecar through a plugin and, when it passes, assembles a brief for a
-reader. That brief holds the written text of one section, the text of the claims that section selects, the
-resolved signature in words, the assertion tree, and the outcomes.
+The deterministic stage consumes the sidecar through a plugin, and it assembles a brief for a reader for each claim
+whose deterministic checks pass; a claim whose checks fail is recorded as that claim's result and does not cost the
+other claims their briefs. That brief holds the assembled body of one section, which is the authored prose with its
+gathered content resolved, the text of the claims the section names, the resolved signature in words, the assertion
+tree, and the outcomes.
 
 The semantic stage consumes only that brief. It never calls a plugin, and it must be able to run on a machine
 with no language toolchain installed. That requirement is the test of whether the boundary is real: if the
 semantic stage reaches back for a referent, the boundary is decorative.
 
-The brief is assembled and owned by the engine. It is an output, never an input, and the markup that carries it
+The brief is assembled and owned by the engine. It is an output, never an input to a run, and the markup that carries it
 is not part of any contract. A `.spec.md` file is a different artifact: a person or an agent writes it, and the
 engine reads it.
 
@@ -42,7 +44,7 @@ about a past run and is never read as input to a new one.
 
 ## Consequences
 
-The cache key is one section together with the claims that section selects, rather than a whole file, so
+The cache key is one section together with the claims the section names, rather than a whole file, so
 editing one sentence does not re-judge a document. Model id, prompt version, and the referent revision are
 recorded in the same key because they change without the prose changing.
 
