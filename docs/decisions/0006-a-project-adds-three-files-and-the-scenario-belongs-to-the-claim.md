@@ -2,8 +2,9 @@
 
 Status: proposed, 2026-11-18. Amended three times the same day: the sidecar became executable, the plugin for a
 compiled language split into a library and an executable, and sharing lost its mechanism. No open decisions remain.
-One part is implemented: the readable claim name, which is now normative at `docs/spec.md:152-158`, is built by
-`hash::claim_name`, and the two plugins are being cut over to the same rule. The rest is not implemented.
+Implemented in the engine as of 2026-11-18: the readable claim name `hash::claim_name`, the three-file layout
+at `docs/spec.md:81-108`, the per-claim scenario, and the per-claim run failure. The two plugins are being cut
+over to the same contract.
 
 ## Context
 

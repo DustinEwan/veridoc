@@ -50,7 +50,7 @@ intended. [Judge tasks](#judge-tasks) reduces that failure and does not remove i
 | --- | --- | --- |
 | Referent | A reference to one symbol, boundary, or declared concept, resolved by the plugin | A stable id that the plugin derives from the declaration, not from a file position |
 | Claim | One atomic assertion about one subject, of a declared kind, with an assertion tree or a citation | `referentId#predicate`, stored as a hash |
-| Scenario | A declared world and one action, bound to the claim's referent | Its file and scenario id |
+| Scenario | The world and the call of one claim, with the names and types of the values they produce, declared beside that claim | Nothing of its own: its claim's id addresses it |
 | Document node | One declared element of the document tree, with an audience and one question | Its path in the tree |
 | Verdict | A pinned judge answer about one section against the claims it names | `sha(sectionHash, claimSetHash, referentRevision, model, promptVersion)` |
 
@@ -82,16 +82,13 @@ are an S2 finding.
 
 ```
 project/
-  index.doc.<ext>                   the document tree: closed, obligating
+  index.doc.<ext>                   the document tree and the concepts: closed, obligating
   src/
     scanner.<ext>                   the code
-    scanner.doc.<ext>               claims about scanner.<ext>
+    scanner.doc.<ext>               the claims about scanner.<ext>, each with its own scenario
   docs/
     architecture.spec.md          authored prose in keyed sections
     harness-authoring.spec.md
-  features/
-    <concept>.feature             scenarios: a world and an action
-    <concept>.obs.<ext>             declared observables and actions
   .veridoc/
     config.json                   coverage requirement, plugin command, run deadline, judge, output formatters, citation stores
     verdicts/*.json               the semantic cache, each entry holding the brief that produced the verdict
@@ -101,9 +98,14 @@ project/
     out/<formatter>/              where the formatters write
 ```
 
+A project adds three kinds of file: `index.doc.<ext>`, which holds the document tree and the concepts and
+nothing else; `src/<module>.doc.<ext>`, which holds the claims about that module and each claim's own
+scenario; and `docs/<name>.spec.md`, which holds prose. The scenario has no file of its own, because it has
+no identity of its own (`docs/decisions/0006-a-project-adds-three-files-and-the-scenario-belongs-to-the-claim.md`).
+
 `<ext>` is the extension of the project's own source language. The host names no language and no extension: it
-asks a plugin to collect, and the plugin decides which files of its own language carry the index, the claims, and
-the vocabulary. A layout rule that names `.ts` is a rule a project in any other language cannot satisfy.
+asks a plugin to collect, and the plugin decides which files of its own language carry the index and the
+claims. A layout rule that names `.ts` is a rule a project in any other language cannot satisfy.
 
 The file that holds the document tree belongs to the plugin, not the host. `veridoc init` writes the
 configuration and the ignore entry and no document file, because a host that writes a file it cannot
@@ -120,18 +122,21 @@ the engine can show which claims that section covers.
 A claim is a call to a typed builder, so a claim that points at a renamed symbol stops compiling.
 
 ```ts
-import { claim, ref, scenario, fixture } from "@veridoc/claims";
+import { claim, ref } from "@veridoc/claims";
 
 claim.ensures({
   subject: ref(parseConfig),                 // resolved by the plugin, not a string
   concept: "project-scan",
   predicate: "rejects-missing-project-root",
   text: "A missing project root is refused with a diagnostic that names the searched path.",
-  scenario: scenario("config/rejects-missing-root"),
+  given: "an empty directory",
+  when: "run probe-plugin against that directory",
+  values: [{ name: "exit.code", type: "number" }, { name: "stderr.text", type: "string" },
+           { name: "writtenFiles", type: "array" }],
   asserts: {
     all: [
       { obs: "exit.code",       is: equals(2) },
-      { obs: "stderr.text",     is: contains(fixture.searchedPath) },
+      { obs: "stderr.text",     is: contains("no .veridoc/config.json above") },
       { obs: "writtenFiles",    is: satisfies((f: string[]) => f.length === 0) },
     ],
   },
@@ -142,8 +147,8 @@ claim.ensures({
 
 | Kind | Modality | Channel | Shown to be false by |
 | --- | --- | --- | --- |
-| `requires` | Normative | scenario, or judge | An action that satisfies the precondition and breaks the postcondition |
-| `ensures` | Normative | scenario, or judge | An action whose observed values disagree with the assertion tree |
+| `requires` | Normative | scenario, or judge | A scenario whose world satisfies the precondition and whose call breaks the postcondition |
+| `ensures` | Normative | scenario, or judge | A scenario whose values disagree with the assertion tree |
 | `invariant` | Normative | scenario over a declared generator, or judge | A reachable state that violates the property |
 | `witness` | Observational | artefact | An artefact that no longer resolves, or no longer matches its recorded hash |
 | `because` | Provenance | citation | A reference that no longer resolves, or cited text that does not support the reason |
@@ -213,20 +218,20 @@ those values with the tree and produces the outcome, so there is no path by whic
 asserts: {
   all: [
     { obs: "thrown.name",    is: equals("RangeError") },
-    { obs: "thrown.message", is: contains(fixture.limit) },
+    { obs: "thrown.message", is: contains(LIMIT) },
     { obs: "writtenFiles",   is: satisfies((f: string[]) => f.length === 0) },
   ],
 }
 ```
 
 `all`, `any`, and `not` compose, so a claim can assert a conjunction, a disjunction, or a negation over
-several observables. Expected values come from constants or from the fixture, which is what lets an
-assertion depend on the world rather than on a literal. `satisfies(fn)` is a typed function over one
-observable, and it is where real logic lives.
+several values. Expected values come from constants, which is what an author reads most easily; the world the
+scenario builds is what the assertion is measured against. `satisfies(fn)` is a typed function over one
+value, and it is where real logic lives.
 
 ### Bivalence
 
-An assertion is bivalent when both outcomes are attainable over the declared type of its observables. An
+An assertion is bivalent when both outcomes are attainable over the declared type of the values it reads. An
 assertion that cannot fail is not evidence, so bivalence is required before a claim may take the scenario
 channel.
 
@@ -255,7 +260,7 @@ compares them against the sentence.
 A weak assertion tree that satisfies a rich sentence is a documentation error rather than a harness error,
 because the gap is between `text` and `asserts`. That gap is the comparison that the judge already makes, and
 it is the reason that the tree stays structured rather than becoming one opaque function: a judge reasons far better
-about a sentence beside a list of observables and checks than about a sentence beside a body of code.
+about a sentence beside a list of values and checks than about a sentence beside a body of code.
 
 ## The document tree
 
@@ -309,17 +314,16 @@ exactly the thing an author must not be asked to copy.
 A fact the code decides has no place in prose that a person writes: the author copies it, and nothing
 re-checks the copy (`docs/decisions/0011-an-authored-placeholder-pulls-its-content-at-assembly.md`). A
 `<doc-each source="COLLECTION">` on a line of its own asks for that fact, and the one block that follows
-it is the block that repeats. `<doc-each source="observables">` followed by
-`- <doc-value field="name"/> is a <doc-value field="type"/>` becomes one list item per declared
-observable. `<doc-value field="…"/>` marks where a value lands, and a bare `<doc-value/>` takes the item's
+it is the block that repeats. `<doc-each source="concepts">` followed by `- <doc-value field="name"/>`
+becomes one list item per declared concept. `<doc-value field="…"/>` marks where a value lands, and a bare
+`<doc-value/>` takes the item's
 own name where the collection names its items.
 
 The values come from the tree the build already holds, so injection asks nothing new of a plugin. The
-source names one collection: `claims` (the claims that section names), `concepts`, `documents`,
-`observables`, `actions`, or `fixtures`. A field is one of that collection's own: `id`, `subject`,
-`predicate`, `concept`, `text`, `kind`, `referent`, `signature`, `file`, `line` or `channel` on `claims`;
-`name` on `concepts` and `fixtures`; `path`, `audience` or `question` on `documents`; `name` or `type` on
-`observables`; `name`, `calls` or `produces` on `actions`.
+source names one collection: `claims` (the claims that section names), `concepts`, or `documents`. A field is
+one of that collection's own: `id`, `subject`, `predicate`, `concept`, `text`, `kind`, `referent`,
+`signature`, `file`, `line` or `channel` on `claims`; `name` on `concepts`; `path`, `audience` or `question`
+on `documents`.
 
 The authored file keeps the placeholder, because the engine never writes into a `.spec.md` file. The
 assembled body, the one the brief carries and the section hash covers, is where the values appear, so
@@ -338,50 +342,57 @@ growth, and it runs against the index, which is small enough to judge on every c
 
 ## Scenarios
 
-A scenario is a declared world and one action. It has no assertion slot, because the claim owns the
-assertion, and a scenario that could assert anything is a scenario that could assert nothing.
+A scenario belongs to one claim. It is a declared world and one call, written beside the claim it evidences,
+and it has no assertion slot and no name of its own: the claim owns the assertion, and a scenario that could
+assert anything is a scenario that could assert nothing.
 
-```gherkin
-Feature: project scan
-
-  Scenario: A missing project root is refused
-    Given the empty-directory fixture
-    When afz probe-plugin runs in that directory
+```ts
+claim.ensures({
+  subject: ref(parseConfig),
+  concept: "project-scan",
+  predicate: "rejects-missing-project-root",
+  text: "A missing project root is refused with a diagnostic that names the searched path.",
+  given: "an empty directory",
+  when: "run probe-plugin against that directory",
+  values: [{ name: "exit.code", type: "number" }],
+  asserts: { obs: "exit.code", is: equals(2) },
+});
 ```
 
-`Given` refers to a fixture from the declared set. `When` refers to a declared action, and that action must
-resolve to a call of the claim's own referent, which the plugin checks at bind time. A scenario bound to a
-claim whose action calls something else is an error before anything runs, and so is an assertion that names
-an observable the action cannot produce.
+`given` and `when` are two labels the plugin resolves to its own code; the engine holds no scenario grammar
+and parses neither. `values` declares the name and the type of everything that world and call produce, and
+that declaration is what lets the engine refuse an assertion over a value the scenario does not declare, and
+a `contains` over a value declared as a number, before anything runs.
 
 ### The vocabulary is closed
 
-Observables and actions are declared once per project, with types, and a scenario can only refer to what is
-declared. This is where slop used to collect, because a step defined as `the response should be correct`
-can be written to accept anything; with no step bodies there is nothing left to write that way, and the
-constraint moves to the declaration of each observable, which is a reviewed diff.
+There is no project-wide vocabulary to declare. The values a scenario produces are declared by that scenario,
+and an assertion can read nothing else, so the constraint sits on the declaration beside the claim, which is a
+reviewed diff. This is where slop used to collect, because a step defined as `the response should be correct`
+can be written to accept anything; with no step bodies there is nothing left to write that way.
 
 ### Determinism
 
-Evidence has to be re-runnable by someone who did not write it, which is failure six, and three static rules
-settle it. The `Given` world refers to a fixture from the declared set, and a scenario that refers to no
-fixture is not evidence. Every observable that an assertion reads is declared, and an undeclared observable
-stops the build. A scenario that refers to anything outside those two sets is not evidence.
+Evidence has to be re-runnable by someone who did not write it, which is failure six, and two static rules
+settle it. Every value an assertion reads is one its own claim's scenario declares, and an assertion over a
+value that scenario does not declare stops the build. A `contains` sits over a value whose declared type can
+hold one.
 
 Nothing is detected at run time, because there is nothing for a detector to find: an assertion can only read
-declared observables.
+the values its own claim's scenario declares.
 
 ## Evidence and outcomes
 
-Every claim ends in one of two outcomes, and the channel that produced it is recorded beside it.
+Every claim ends in one of three outcomes, and the channel that produced it is recorded beside it.
 
 | Outcome | Meaning |
 | --- | --- |
 | `supported` | The channel evaluated the claim and agreed with it |
 | `contradicted` | The channel evaluated the claim and disagreed, so the sentence is wrong |
+| `run-failed` | The claim's scenario never ran, so nothing about the claim was evaluated |
 
-A channel that was asked and did not answer is a run failure: the run stops, the build is red, and no claim
-is given an outcome.
+A scenario that did not run is that claim's `run-failed` outcome, and nothing stronger: the run goes on, and
+every other claim keeps its verdict.
 
 Coverage is claims in state `supported` divided by claims, split by channel. A project sets a required
 coverage figure in `.veridoc/config.json` and the run compares the achieved figure against it, so adoption
@@ -398,15 +409,16 @@ that names the missing thing.
 | A claim has two channels, or none | The claim does not say how it can be checked |
 | A scenario-channel claim has no scenario | A checkable claim was left unevaluated |
 | A judge-channel claim has no verdict | A semantic claim was left unevaluated |
-| A scenario bound to a claim calls a different referent | The evidence is about other code |
-| An assertion reads an observable the action cannot produce | The evidence cannot answer the claim |
+| An assertion reads a value its scenario does not declare | The evidence cannot answer the claim |
+| An assertion is `contains` over a value declared as a number | The check cannot hold |
 | An assertion cannot fail | The evidence is not evidence |
-| The build, the plugin, or a fixture fails | The run is red, recorded once at scenario level |
-| A scenario outlives its deadline | The run is red; a slow machine is not blamed on the prose |
+| The build, the plugin, or a scenario fails | That claim's outcome is `run-failed`; the build goes on |
+| A scenario outlives its deadline | That claim's outcome is `run-failed`; a slow machine is not blamed on the prose |
 
-A claim outcome is never produced by any row in that table. A broken fixture is a run failure and not a
-finding about the documentation, and it is not written as though one claim were weaker than the others,
-because one broken build would then print thousands of unevidenced claims.
+A `run-failed` claim is never called supported or contradicted, because a run that did not happen is evidence
+of nothing. A scenario that cannot run is that claim's outcome and not a finding about the documentation, and
+it is not written as though one claim were weaker than the others, because one broken build would then print
+thousands of unevidenced claims.
 
 ### When a claim is contradicted
 
@@ -621,14 +633,16 @@ export interface VeridocPlugin {
     next: string[];
   }>;
 
-  /** Read the index, every claim sidecar, and every vocabulary sidecar, and report what was declared. */
+  /** Read the index and every claim sidecar, and report what was declared, each scenario beside its claim. */
   collect(req: { root: string }): Promise<{
     concepts: string[];
     documents: Array<{ path: string; audience: string; question: string; notApplicable?: string }>;
     claims: RawClaim[];
-    observables: Array<{ name: string; type: string }>;
-    actions: Array<{ name: string; calls: RefToken; produces: string[] }>;
-    fixtures: string[];
+    /** Each claim's own scenario, keyed by that claim's id; a claim with no entry has no scenario. */
+    scenarios: Record<string, {
+      given: string; when: string;
+      values: Array<{ name: string; type: "string" | "number" | "boolean" | "array" | "object" }>;
+    }>;
     skipped: Array<{ file: string; reason: string }>;
   }>;
 
@@ -648,8 +662,8 @@ export interface VeridocPlugin {
   }>;
 
   run(req: {
-    scenarioId: string; fixture: string; action: string; args: string[];
-    deadlineMs: number; leaves: Array<{ leafId: string }>;
+    /** The claim is the only address a run takes: the scenario belongs to it. */
+    claim: string; timeoutMs: number;
   }): Promise<{
     ok: boolean;
     observed: Array<{ observable: string; value: string }>;
@@ -692,9 +706,9 @@ against the fake plugin this repository builds rather than this document's word 
 A failing run writes no artifact and prints `file:line:` diagnostics. A succeeding run writes
 `.veridoc/result.json` and runs the output formatters the project configures.
 
-Harness detail, including every scenario that could not be evaluated and the reason, is the run failure on
-stderr. A reader of the diagnostics is deciding what to change in the documentation, not what to repair in a
-fixture.
+Harness detail, including every scenario that could not be evaluated and the reason, travels with the claim
+that failed to run. A reader of the diagnostics is deciding what to change in the documentation, not what to
+repair in a scenario.
 
 | Metric | Definition |
 | --- | --- |

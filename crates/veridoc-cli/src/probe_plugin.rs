@@ -8,7 +8,6 @@ use std::time::Duration;
 use serde_json::Value;
 use veridoc_engine::bind::CollectWire;
 use veridoc_engine::config;
-use veridoc_engine::hash;
 use veridoc_engine::plugin::{sentence, PluginClient};
 use veridoc_protocol::Method;
 
@@ -64,12 +63,6 @@ pub fn run(project: &Path) -> Result<i32, String> {
             keys.push(key);
         }
     }
-    for action in &collect.actions {
-        let key = action.calls.key();
-        if !keys.contains(&key) {
-            keys.push(key);
-        }
-    }
     let resolved = match sentence("resolve", client.resolve(&keys)) {
         Ok(resolved) => resolved,
         Err(why) => {
@@ -80,10 +73,9 @@ pub fn run(project: &Path) -> Result<i32, String> {
 
     println!("claims:");
     for claim in &collect.claims {
-        let id = hash::claim_name(claim.subject.subject_name(), &claim.predicate);
         println!(
-            "  {id}  {:?}  {}:{}  {}",
-            claim.kind, claim.file, claim.line, claim.text
+            "  {}  {:?}  {}:{}  {}",
+            claim.id, claim.kind, claim.file, claim.line, claim.text
         );
     }
     println!("referents:");

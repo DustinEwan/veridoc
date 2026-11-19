@@ -29,7 +29,6 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use veridoc_engine::hash;
 use veridoc_engine::plugin::{sentence, Launch, PluginClient};
 use veridoc_engine::plugins;
 use veridoc_protocol::{
@@ -43,6 +42,7 @@ pub const RULES: &[&str] = &[
     "resolve-known",
     "derivable-schema",
     "bivalence-negatives",
+    "scenarios-declare-values",
     "run-returns-values",
     "cite-schema",
     "surface-schema",
@@ -154,17 +154,15 @@ pub struct Check {
 
 /// `veridoc-conformance.json`, written by the emitter: the names the suite drives. The suite
 /// reads no source of the target language; every subject it touches is named here or came
-/// from `collect`.
+/// from `collect`. Nothing here addresses a scenario: the scenario belongs to a claim, so the
+/// manifest names the claim by predicate and the suite asks for its id from `collect`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Manifest {
-    /// Predicate of the claim whose scenario channel the suite runs.
+    /// Predicate of the claim whose scenario the suite runs. Its id comes from `collect`.
     pub scenario_claim: String,
-    pub scenario_id: String,
-    pub fixture: String,
-    pub action: String,
-    /// Observables the run must report, declared names verbatim.
-    pub observables: Vec<String>,
+    /// The value names that claim's `run` must answer, declared verbatim.
+    pub values: Vec<String>,
     pub citation_store: String,
     pub citation_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -312,6 +310,11 @@ pub const GATES: &[(&str, Option<Capability>, &[&str])] = &[
         "bivalence-negatives",
         Some(Capability::Bivalence),
         &["collect-schema", "resolve-known"],
+    ),
+    (
+        "scenarios-declare-values",
+        Some(Capability::Collect),
+        &["collect-schema"],
     ),
     (
         "run-returns-values",
@@ -470,7 +473,7 @@ pub fn run(check: &Check) -> Result<Report, String> {
 
     let claims = scenario(&mut suite, check, &manifest, &client, deadline);
 
-    // 9./10. framing. These rules need raw lines, not the typed client: an unknown method must
+    // 10./11. framing. These rules need raw lines, not the typed client: an unknown method must
     // be answered with an error frame, and a malformed line must be dropped, not fatal. Each one
     // starts its own plugin, so only a run that never started stops them.
     if !suite.decided("unknown-method-frame") {
@@ -523,7 +526,7 @@ pub fn run(check: &Check) -> Result<Report, String> {
     Ok(suite.finish(plugin, protocol_version, claims))
 }
 
-/// Rules 2 to 8: the ones that read the `collect` answer. A failure that leaves the suite with
+/// Rules 2 to 9: the ones that read the `collect` answer. A failure that leaves the suite with
 /// nothing to read stops the section rather than reporting seven symptoms of one cause, and every
 /// rule it stopped is recorded as not applicable with that failure named (§12 item 3).
 fn scenario(
@@ -710,14 +713,13 @@ fn scenario(
                 .claims
                 .iter()
                 .find(|c| c.predicate == expect.predicate)
-                .map(|c| Ok(claim_id_for(c)))
+                .map(|c| c.id.clone())
             {
                 None => Err(format!(
                     "collect reported no claim with predicate \"{}\"",
                     expect.predicate
                 )),
-                Some(Err(e)) => Err(e),
-                Some(Ok(claim_id)) => schema("bivalence-result.json").and_then(|v| {
+                Some(claim_id) => schema("bivalence-result.json").and_then(|v| {
                     call_ok(
                         client,
                         Method::Bivalence,
@@ -753,15 +755,57 @@ fn scenario(
         }
     }
 
-    // 6. run-returns-values. The engine evaluates the assertion tree, so the answer must be
-    // values: ok, every declared observable, one answer per leaf, and no verdict field.
+    // 6. scenarios-declare-values. The assertion stays data the engine evaluates, so every value
+    // an assertion reads must be declared by that claim's own scenario, with a type the check can
+    // hold. These are the two checks bind makes, seen from outside the plugin.
+    if !suite.decided("scenarios-declare-values") {
+        let mut declared = Vec::new();
+        for claim in &collect.claims {
+            let Some(asserts) = claim.channel.asserts.as_ref() else {
+                continue;
+            };
+            let Some(scenario) = collect.scenarios.get(&claim.id) else {
+                declared.push(format!(
+                    "claim {} declares an assertion with no scenario beside it",
+                    claim.id
+                ));
+                continue;
+            };
+            for (_, leaf) in asserts.leaves() {
+                let Some(value) = scenario.values.iter().find(|v| v.name == leaf.obs) else {
+                    declared.push(format!(
+                        "claim {} reads {}, which its scenario does not declare",
+                        claim.id, leaf.obs
+                    ));
+                    continue;
+                };
+                if matches!(leaf.r#is, veridoc_protocol::Check::Contains(_))
+                    && !value.kind.holds_contains()
+                {
+                    declared.push(format!(
+                        "claim {} asserts contains over {}, which its scenario declares as {}",
+                        claim.id,
+                        leaf.obs,
+                        value.kind.name()
+                    ));
+                }
+            }
+        }
+        if !declared.is_empty() {
+            suite.fail("scenarios-declare-values", declared.join("; "));
+        }
+    }
+
+    // 7. run-returns-values. The engine evaluates the assertion tree, so the answer must be
+    // values: ok, every value the fixture's scenario declares, one answer per leaf, and no
+    // verdict field.
     if !suite.decided("run-returns-values") {
         if let Err(detail) = run_scenario(manifest, client, deadline, &collect) {
             suite.fail("run-returns-values", detail);
         }
     }
 
-    // 7. cite-schema. The store is declared in the emitted project, so the citation must
+    // 8. cite-schema. The store is declared in the emitted project, so the citation must
     // resolve with text; an unresolved answer is the plugin failing, not a legitimate miss.
     if !suite.decided("cite-schema") {
         let citation = Citation {
@@ -798,7 +842,7 @@ fn scenario(
         }
     }
 
-    // 8. surface-schema. `surface` takes no params, so the request omits them rather than
+    // 9. surface-schema. `surface` takes no params, so the request omits them rather than
     // sending an empty object: a suite that sends a shape no host sends proves nothing.
     if !suite.decided("surface-schema") {
         match schema("surface-result.json").and_then(|v| -> Result<SurfaceResult, String> {
@@ -812,9 +856,9 @@ fn scenario(
             Err(e) => suite.fail("surface-schema", e),
         }
     }
-    // 9. init-creates-the-project. `initialization` is the capability that lets the plugin write the
-    //    files the host cannot (`docs/decisions/0013`), so the suite asks for a scratch project and
-    //    checks the answer is true on disk.
+    // 10. init-creates-the-project. `initialization` is the capability that lets the plugin write
+    //     the files the host cannot (`docs/decisions/0013`), so the suite asks for a scratch
+    //     project and checks the answer is true on disk.
     if !suite.decided("init-creates-the-project") {
         if let Err(e) = init_probe(client, deadline) {
             suite.fail("init-creates-the-project", e);
@@ -893,14 +937,9 @@ fn method_name(method: BivalenceMethod) -> String {
     }
 }
 
-/// The claim id a collected claim carries: the same readable name `hash::claim_name` gives the
-/// bind pass, so the plugin sees the id a real run would send (`docs/spec.md:152-158`). It is
-/// built from the author's subject name, so it needs no resolved referent.
-fn claim_id_for(claim: &RawClaim) -> String {
-    hash::claim_name(claim.subject.subject_name(), &claim.predicate)
-}
-
-/// Drive the manifest's scenario and check the shape of the answer: values, not verdicts.
+/// Drive the manifest's scenario and check the shape of the answer: values, not verdicts. The
+/// claim's id is the only address a `run` takes, and the leaf ids a plugin answers are the ones
+/// the claim's own assertion tree implies, in its pre-order walk.
 fn run_scenario(
     manifest: &Manifest,
     client: &PluginClient,
@@ -917,31 +956,25 @@ fn run_scenario(
                 manifest.scenario_claim
             )
         })?;
-    let claim_id = claim_id_for(claim);
+    let claim_id = claim.id.clone();
     let asserts = claim
         .channel
         .asserts
         .as_ref()
         .ok_or_else(|| format!("claim {claim_id} has no assertion tree to run"))?;
-    let leaves: Vec<RunLeaf> = asserts
+    let leaves: Vec<String> = asserts
         .leaves()
         .into_iter()
-        .map(|(index, _)| RunLeaf {
-            leaf_id: format!("{claim_id}#l{index}"),
-        })
+        .map(|(index, _)| format!("{claim_id}#l{index}"))
         .collect();
     if leaves.is_empty() {
         return Err(format!("claim {claim_id} asserts nothing"));
     }
     let request = RunRequest {
-        scenario_id: manifest.scenario_id.clone(),
-        fixture: manifest.fixture.clone(),
-        action: manifest.action.clone(),
-        args: Vec::new(),
-        // The suite owns the wait below, so the plugin's deadline is derived from it and is
+        claim: claim_id,
+        // The suite owns the wait below, so the plugin's own timeout is derived from it and is
         // strictly shorter (spec §9).
-        deadline_ms: Timeouts::plugin_deadline(deadline),
-        leaves,
+        timeout_ms: Timeouts::plugin_deadline(deadline),
     };
     let raw = sentence(
         "run",
@@ -972,14 +1005,14 @@ fn run_scenario(
         .map(|o| o.observable.as_str())
         .collect();
     let missing: Vec<&str> = manifest
-        .observables
+        .values
         .iter()
         .map(String::as_str)
         .filter(|name| !observed.contains(name))
         .collect();
     if !missing.is_empty() {
         return Err(format!(
-            "the run reported none of the declared observables: {}",
+            "the run reported none of the values the fixture scenario declares: {}",
             missing.join(", ")
         ));
     }
@@ -988,10 +1021,9 @@ fn run_scenario(
         .iter()
         .map(|s| s.leaf_id.as_str())
         .collect();
-    let unanswered: Vec<&str> = request
-        .leaves
+    let unanswered: Vec<&str> = leaves
         .iter()
-        .map(|l| l.leaf_id.as_str())
+        .map(String::as_str)
         .filter(|id| !answered.contains(id))
         .collect();
     if !unanswered.is_empty() {

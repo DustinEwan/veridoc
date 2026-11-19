@@ -311,9 +311,10 @@ impl PluginClient {
         )
     }
 
-    /// One scenario. `host_timeout` is the engine's own wait for it; the plugin's `deadlineMs` is
-    /// already derived from that same wait by [`Timeouts::plugin_deadline`] where the request was
-    /// built, so this only keeps the host's side of the one number (spec §9).
+    /// One claim's scenario, addressed by that claim's id. `host_timeout` is the engine's own wait;
+    /// the plugin's `timeoutMs` was already derived from that same wait by
+    /// [`Timeouts::plugin_deadline`] where the request was built, so this only keeps the host's
+    /// side of the one number (spec §9).
     pub fn run(&self, req: &RunRequest, host_timeout: Duration) -> Call<RunResponse> {
         self.call(Method::Run, req, host_timeout)
     }

@@ -25,7 +25,7 @@ use crate::result::{self, ClaimResult, Metrics, Outcome as DocOutcome, ResultDoc
 use crate::verdicts;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use veridoc_protocol::{Call, Capability, Kind, Method, RunFailureKind};
+use veridoc_protocol::{Call, Capability, Kind, Method};
 
 /// What the CLI prints and exits with.
 pub struct Report {
@@ -192,47 +192,67 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
         return report;
     }
 
-    // 6. Execution: scenario claims run and evaluate; contradictions are findings.
-    let executed = match execute::execute(&claims, config.run.scenario_deadline_ms, |req, host| {
+    // 6. Execution: each scenario-channel claim runs its own scenario, and the engine evaluates
+    //    the tree. A scenario that cannot run is recorded as that claim's `run-failed` result and
+    //    every other claim still gets its verdict; only a contradiction is a finding.
+    let executed = execute::execute(&claims, config.run.scenario_deadline_ms, |req, host| {
         client.run(req, host)
-    }) {
-        Ok(executed) => executed,
-        Err(failure) => {
-            let kind = match failure.kind {
-                RunFailureKind::Build => "build",
-                RunFailureKind::Fixture => "fixture",
-                RunFailureKind::Plugin => "plugin",
-                RunFailureKind::Deadline => "deadline",
-            };
-            return Report::run_failure(
-                client.with_fault(&format!("run failed: {kind}: {}", failure.detail)),
-            );
-        }
-    };
+    });
     let mut outcomes: Vec<OutcomeOf> = Vec::new();
-    for done in &executed {
-        let claim = claims
-            .iter()
-            .find(|c| c.id == done.claim_id)
-            .expect("executed claim");
-        match done.outcome {
-            Outcome::Supported => outcomes.push(OutcomeOf {
-                claim,
-                outcome: DocOutcome::Supported,
-                residue: false,
-                channel: "scenario",
-                evidence: scenario_id_of(claim),
-            }),
-            Outcome::Contradicted => {
-                errors.push(Diagnostic::error(
-                    &claim.file,
-                    claim.line,
-                    format!(
-                        "claim {} is contradicted: {}; either {READING_CODE_WRONG}, or {READING_SCENARIO_WRONG}",
-                        claim.id,
-                        done.observed.join(", ")
-                    ),
-                ));
+    for done in executed {
+        match done {
+            execute::Executed::Evaluated {
+                claim_id,
+                outcome,
+                observed,
+            } => {
+                let claim = claims
+                    .iter()
+                    .find(|c| c.id == claim_id)
+                    .expect("executed claim");
+                match outcome {
+                    Outcome::Supported => outcomes.push(OutcomeOf {
+                        claim,
+                        outcome: DocOutcome::Supported,
+                        residue: false,
+                        channel: "scenario",
+                        evidence: scenario_when_of(claim),
+                    }),
+                    Outcome::Contradicted => errors.push(Diagnostic::error(
+                        &claim.file,
+                        claim.line,
+                        format!(
+                            "claim {} is contradicted: {}; either {READING_CODE_WRONG}, or {READING_SCENARIO_WRONG}",
+                            claim.id,
+                            observed.join(", ")
+                        ),
+                    )),
+                }
+            }
+            // A run that did not happen is never a claim called supported or contradicted. It is
+            // the claim's result, said out loud, and the build keeps going.
+            execute::Executed::RunFailed {
+                claim_id,
+                kind,
+                detail,
+            } => {
+                let claim = claims
+                    .iter()
+                    .find(|c| c.id == claim_id)
+                    .expect("executed claim");
+                let said = format!("{}: {detail}", execute::kind_word(kind));
+                warnings.push(crate::result::Warning {
+                    file: Some(claim.file.clone()),
+                    line: Some(claim.line),
+                    message: format!("claim {} did not run: {said}", claim.id),
+                });
+                outcomes.push(OutcomeOf {
+                    claim,
+                    outcome: DocOutcome::RunFailed,
+                    residue: false,
+                    channel: "scenario",
+                    evidence: said,
+                });
             }
         }
     }
@@ -594,9 +614,11 @@ struct OutcomeOf<'a> {
     evidence: String,
 }
 
-fn scenario_id_of(claim: &BoundClaim) -> String {
+/// The evidence a scenario-channel claim carries: the `When` label of the scenario that ran,
+/// which names the world and the call the verdict rests on.
+fn scenario_when_of(claim: &BoundClaim) -> String {
     match &claim.channel {
-        BoundChannel::Scenario { scenario_id, .. } => scenario_id.clone(),
+        BoundChannel::Scenario { when, .. } => when.clone(),
         _ => String::new(),
     }
 }
@@ -864,6 +886,7 @@ fn outcome_word(outcome: DocOutcome) -> &'static str {
     match outcome {
         DocOutcome::Supported => "supported",
         DocOutcome::Contradicted => "contradicted",
+        DocOutcome::RunFailed => "run-failed",
     }
 }
 

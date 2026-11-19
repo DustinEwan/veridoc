@@ -174,6 +174,6 @@ fn the_spec_describes_this_host() {
     );
     assert_eq!(
         spec.methods["run"].deadline_field.as_deref(),
-        Some("deadlineMs")
+        Some("timeoutMs")
     );
 }

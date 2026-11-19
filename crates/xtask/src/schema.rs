@@ -109,14 +109,20 @@ pub fn write_schemas(dir: &Path) -> Result<Vec<String>, String> {
     emit(
         dir,
         &mut written,
-        "observable-decl",
-        &schema_for!(veridoc_protocol::ObservableDecl),
+        "scenario-decl",
+        &schema_for!(veridoc_protocol::ScenarioDecl),
     )?;
     emit(
         dir,
         &mut written,
-        "action-decl",
-        &schema_for!(veridoc_protocol::ActionDecl),
+        "value-decl",
+        &schema_for!(veridoc_protocol::ValueDecl),
+    )?;
+    emit(
+        dir,
+        &mut written,
+        "value-kind",
+        &schema_for!(veridoc_protocol::ValueKind),
     )?;
     emit(
         dir,

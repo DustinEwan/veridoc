@@ -42,15 +42,9 @@ fn two_claims_over_one_subject_and_predicate_are_a_duplicate() {
     let root = std::env::temp_dir().join(format!("veridoc-engine-identity-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("docs")).unwrap();
-    std::fs::create_dir_all(root.join("features")).unwrap();
     std::fs::write(
         root.join("docs/architecture.spec.md"),
         "<doc-section name=\"probe\">\n\nThe root is refused <doc-claim name=\"rejects-missing-project-root\"/>.\n",
-    )
-    .unwrap();
-    std::fs::write(
-        root.join("features/cli.feature"),
-        "Feature: project scan\n\n@id:config/rejects-missing-root\nScenario: A missing project root is refused\nGiven the empty-directory fixture\nWhen the run-probe action runs in that directory\n",
     )
     .unwrap();
     let root = root.canonicalize().unwrap();

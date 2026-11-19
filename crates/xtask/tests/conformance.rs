@@ -132,7 +132,7 @@ fn every_scripted_defect_fires_exactly_the_rules_it_names() {
     let rules = spec["conformance"]["rules"]
         .as_array()
         .expect("the profile declares its own rules");
-    assert_eq!(rules.len(), 8, "the profile declares eight rules");
+    assert_eq!(rules.len(), 9, "the profile declares nine rules");
     for rule in rules {
         let id = rule["id"].as_str().expect("every rule has an id");
         let scripted = rule["defect"]["env"]

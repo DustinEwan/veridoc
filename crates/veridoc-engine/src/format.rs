@@ -77,6 +77,7 @@ fn markdown(root: &Path, config: &Config, doc: &ResultDocument) -> Result<(), St
                         match claim.outcome {
                             crate::result::Outcome::Supported => "supported",
                             crate::result::Outcome::Contradicted => "contradicted",
+                            crate::result::Outcome::RunFailed => "run-failed",
                         }
                     ));
                     out.push_str(&format!(

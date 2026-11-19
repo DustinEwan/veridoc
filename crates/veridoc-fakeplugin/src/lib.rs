@@ -8,6 +8,8 @@
 //! - `"_raw": {"handshake": {...}}` — write the given response verbatim, id included, so a
 //!   test can answer a request with the wrong id.
 //! - `"_malformed": ["collect"]` — write a non-JSON line instead of the response.
+//! - `"_merge": {"collect": {...}}` — merge these keys over that method's default answer
+//!   instead of replacing it, so one defect can break one field of an otherwise conforming answer.
 //! - `"_stderr": ["line"]` — write these lines to stderr before answering anything.
 //!
 //! The same binary is its own conformance fixture: `--emit-conformance <dir>` renders the
@@ -51,15 +53,18 @@ pub const PROBES: &[(&str, bool, &str)] = &[
     ("length-positive", true, "static-analysis"),
 ];
 
+/// The predicate of the one claim with a scenario, which the conformance manifest names and the
+/// engine's happy path runs.
+pub const SCENARIO_CLAIM: &str = "rejects-missing-project-root";
+
 /// The conformance manifest the emitter writes and `collect` reads. `veridoc-conformance.json`
-/// is the emitter's contract with `veridoc-conformance`; the fields mirror its `Manifest`.
+/// is the emitter's contract with `veridoc-conformance`; the fields mirror its `Manifest`. Nothing
+/// here addresses a scenario: the scenario belongs to the claim, and the suite takes the claim's
+/// id from `collect`.
 pub fn conformance_manifest() -> Value {
     json!({
-        "scenarioClaim": "rejects-missing-project-root",
-        "scenarioId": "config/rejects-missing-root",
-        "fixture": "empty-directory",
-        "action": "run-probe",
-        "observables": ["exit.code"],
+        "scenarioClaim": SCENARIO_CLAIM,
+        "values": ["exit.code", "stderr.text"],
         "citationStore": "session",
         "citationId": "conformance",
         "citationTurn": 1,
@@ -91,6 +96,7 @@ fn probe_claims() -> Vec<Value> {
         .iter()
         .map(|(predicate, _, _)| {
             json!({
+                "id": claim_name("probe", predicate),
                 "kind": "ensures",
                 "subject": { "kind": "symbol", "name": "probe", "from": "src/cli.ts" },
                 "concept": "project-scan",
@@ -104,19 +110,29 @@ fn probe_claims() -> Vec<Value> {
         .collect()
 }
 
+/// The values the scenario claim's world and call produce, declared beside the claim: the engine
+/// refuses an assertion over a name this list does not carry.
+fn scenario_values() -> Value {
+    json!([
+        { "name": "exit.code", "type": "number" },
+        { "name": "stderr.text", "type": "string" }
+    ])
+}
+
 /// The default `collect` answer: one concept, one document node, one `ensures` claim with a
-/// bivalent assertion, one scenario, two observables, one action, and no skipped sidecars.
-/// The engine's happy path runs against this without Node. A root that holds a
-/// `veridoc-conformance.json` also gets the five bivalence probes.
+/// bivalent assertion and its own scenario, and no skipped sidecars. The engine's happy path runs
+/// against this without Node. A root that holds a `veridoc-conformance.json` also gets the five
+/// bivalence probes, which have no scenario and are driven through `bivalence` alone.
 pub fn default_collect(req: &Value) -> Value {
+    let scenario_claim = claim_name("probe", SCENARIO_CLAIM);
     let mut claims = vec![json!({
+        "id": scenario_claim,
         "kind": "ensures",
         "subject": { "kind": "symbol", "name": "probe", "from": "src/cli.ts" },
         "concept": "project-scan",
-        "predicate": "rejects-missing-project-root",
+        "predicate": SCENARIO_CLAIM,
         "text": "A missing project root is refused with a diagnostic that names the searched path.",
         "channel": {
-            "scenario": "config/rejects-missing-root",
             "asserts": { "obs": "exit.code", "is": { "equals": 2 } }
         },
         "file": "src/cli.doc.ts",
@@ -138,16 +154,13 @@ pub fn default_collect(req: &Value) -> Value {
             "question": "What must my plugin answer, and in what order?"
         }],
         "claims": claims,
-        "observables": [
-            { "name": "exit.code", "type": "number" },
-            { "name": "stderr.text", "type": "string" }
-        ],
-        "actions": [{
-            "name": "run-probe",
-            "calls": { "kind": "symbol", "name": "probe", "from": "src/cli.ts" },
-            "produces": ["exit.code", "stderr.text"]
-        }],
-        "fixtures": ["empty-directory"],
+        "scenarios": {
+            (scenario_claim): {
+                "given": "an empty directory",
+                "when": "run probe-plugin in an empty directory",
+                "values": scenario_values()
+            }
+        },
         "skipped": []
     })
 }
@@ -218,21 +231,19 @@ pub fn default_bivalence(req: &Value) -> Value {
     json!({ "bivalent": true, "method": "structural" })
 }
 
-/// The scenario answers with `exit.code = 2` and marks every leaf the engine issued as
-/// satisfied, so the default claim's tree holds.
+/// The scenario answers with `exit.code = 2` and marks its leaf satisfied, so the default claim's
+/// tree holds. `run` is addressed by the claim alone, and the leaf ids are the pre-order walk of
+/// the claim's own assertion tree — which this plugin declared, so it derives them itself rather
+/// than being told them.
 pub fn default_run(req: &Value) -> Value {
-    let leaves = req["leaves"].as_array().cloned().unwrap_or_default();
-    let satisfied: Vec<Value> = leaves
-        .iter()
-        .map(|leaf| json!({ "leafId": leaf["leafId"], "ok": true }))
-        .collect();
+    let claim = req["claim"].as_str().unwrap_or_default();
     json!({
         "ok": true,
         "observed": [
             { "observable": "exit.code", "value": "2" },
             { "observable": "stderr.text", "value": "no .veridoc/config.json above /tmp/x" }
         ],
-        "satisfied": satisfied
+        "satisfied": [ { "leafId": format!("{claim}#l0"), "ok": true } ]
     })
 }
 
@@ -385,7 +396,12 @@ pub fn serve(reader: impl BufRead, writer: &mut impl Write) {
         let params = req.params.clone().unwrap_or(Value::Null);
         let result = match script.get(method.name()) {
             Some(override_result) if !override_result.is_null() => Ok(override_result.clone()),
-            _ => default_result(method, &params),
+            _ => default_result(method, &params).map(|default| {
+                match script["_merge"].get(method.name()) {
+                    Some(merge) => merge_over(default, merge),
+                    None => default,
+                }
+            }),
         };
         match result {
             Ok(value) => {
@@ -396,4 +412,16 @@ pub fn serve(reader: impl BufRead, writer: &mut impl Write) {
             }
         }
     }
+}
+
+/// The top-level keys of `merge`, set on `base`. A scripted defect uses this to break one field of
+/// an otherwise conforming answer instead of replacing the whole answer and failing every rule
+/// that reads it.
+fn merge_over(mut base: Value, merge: &Value) -> Value {
+    if let (Some(base), Some(merge)) = (base.as_object_mut(), merge.as_object()) {
+        for (key, value) in merge {
+            base.insert(key.clone(), value.clone());
+        }
+    }
+    base
 }

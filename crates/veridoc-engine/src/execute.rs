@@ -1,14 +1,14 @@
 //! Execution: the engine runs each scenario-channel claim's scenario and evaluates the
-//! assertion tree itself. The plugin answers values and never a verdict, and the outcome has
-//! exactly two members — a claim is either certified or the run is red (`docs/spec.md:356`).
+//! assertion tree itself. The plugin answers values and never a verdict, and a claim's result has
+//! three members: the tree held, the tree did not hold, or the scenario never ran
+//! (`docs/decisions/0006-a-project-adds-three-files-and-the-scenario-belongs-to-the-claim.md`).
 
 use std::time::Duration;
 
 use crate::bind::{BoundChannel, BoundClaim};
 use serde_json::Value;
 use veridoc_protocol::{
-    Asserts, Call, Check, LeafAnswer, Loss, RunFailure, RunFailureKind, RunLeaf, RunRequest,
-    RunResponse, Timeouts,
+    Asserts, Call, Check, LeafAnswer, Loss, RunFailureKind, RunRequest, RunResponse, Timeouts,
 };
 
 /// The two readings a contradiction cannot separate (`docs/spec.md:362-366`). Both travel
@@ -23,96 +23,103 @@ pub enum Outcome {
     Contradicted,
 }
 
-/// One scenario-channel claim after its scenario ran.
+/// One scenario-channel claim after its scenario ran, or after it failed to run.
 #[derive(Debug, Clone)]
-pub struct Executed {
-    pub claim_id: String,
-    pub outcome: Outcome,
-    /// For a contradicted claim: every observed value in tree order, rendered
-    /// `{observable} = {value}`; a leaf that read an absent observable shows `(absent)`.
-    pub observed: Vec<String>,
+pub enum Executed {
+    /// The scenario ran, and the engine evaluated the tree against the values it answered.
+    Evaluated {
+        claim_id: String,
+        outcome: Outcome,
+        /// For a contradicted claim: every value in tree order, rendered `{observable} = {value}`;
+        /// a leaf that read a value the run did not answer shows `(absent)`.
+        observed: Vec<String>,
+    },
+    /// The scenario did not run. That is this claim's result and nothing stronger — never
+    /// `supported`, never `contradicted` — and the run goes on so that one typo costs no other
+    /// claim its verdict.
+    RunFailed {
+        claim_id: String,
+        kind: RunFailureKind,
+        detail: String,
+    },
 }
 
-/// Run every scenario-channel claim, sequentially, and evaluate each tree. `run` is the
-/// plugin call supplied by the caller, given the request and this engine's own wait for it;
-/// any `Err(RunFailure)` stops the whole run, because a run failure is never a claim state.
-/// `deadline_ms` is that wait: the engine owns the kill timer, and the plugin's `deadlineMs` is
-/// derived from it rather than being a second number written by hand (spec §9).
+/// The four ways a run answers nothing, spelled the way the report spells them.
+pub fn kind_word(kind: RunFailureKind) -> &'static str {
+    match kind {
+        RunFailureKind::Build => "build",
+        RunFailureKind::Fixture => "fixture",
+        RunFailureKind::Plugin => "plugin",
+        RunFailureKind::Deadline => "deadline",
+    }
+}
+
+/// Run every scenario-channel claim, sequentially, and evaluate each tree. `run` is the plugin
+/// call supplied by the caller, given the request and this engine's own wait for it; a `run` that
+/// is refused, is lost, outlives its deadline, or answers `ok: false` is recorded as that claim's
+/// `run-failed` result and the loop moves on. `deadline_ms` is the engine's wait: the engine owns
+/// the kill timer, and the plugin's `timeoutMs` is derived from it rather than being a second
+/// number written by hand (spec §9).
 pub fn execute(
     claims: &[BoundClaim],
     deadline_ms: u64,
     mut run: impl FnMut(&RunRequest, Duration) -> Call<RunResponse>,
-) -> Result<Vec<Executed>, RunFailure> {
+) -> Vec<Executed> {
     let host_timeout = Duration::from_millis(deadline_ms);
-    let plugin_deadline = Timeouts::plugin_deadline(host_timeout);
+    let plugin_timeout = Timeouts::plugin_deadline(host_timeout);
     let mut executed = Vec::new();
 
     for claim in claims {
-        let BoundChannel::Scenario {
-            scenario_id,
-            fixture,
-            action,
-            args,
-            asserts,
-        } = &claim.channel
-        else {
+        let BoundChannel::Scenario { asserts, .. } = &claim.channel else {
             continue;
         };
 
-        // Leaf ids are assigned by a pre-order walk, so the ids are stable for a given tree.
-        let leaves: Vec<RunLeaf> = asserts
-            .leaves()
-            .into_iter()
-            .map(|(index, _)| RunLeaf {
-                leaf_id: format!("{}#l{index}", claim.id),
-            })
-            .collect();
+        // The claim is the only address: the scenario belongs to it, and the leaf ids the plugin
+        // answers are the pre-order walk of the assertion tree the plugin itself declared.
         let request = RunRequest {
-            scenario_id: scenario_id.clone(),
-            fixture: fixture.clone(),
-            action: action.clone(),
-            args: args.clone(),
-            deadline_ms: plugin_deadline,
-            leaves,
+            claim: claim.id.clone(),
+            timeout_ms: plugin_timeout,
         };
 
         let response = match run(&request, host_timeout) {
             Call::Result(response) => response,
-            // A scenario that outlived its deadline is red with kind `deadline`; the prose
-            // is not blamed on a slow machine (`docs/spec.md:354`). Only a loss says nothing
-            // was answered. A refusal is an answer — the plugin is alive — so it is the
-            // plugin's own fault, kind `plugin`, and must not be read as a deadline.
+            // A scenario that outlived its deadline is a deadline failure; the prose is not
+            // blamed on a slow machine (`docs/spec.md:354`). Only a loss says nothing was
+            // answered. A refusal is an answer — the plugin is alive — so it is the plugin's own
+            // fault, kind `plugin`, and must not be read as a deadline.
             Call::Lost(Loss::NoAnswer) => {
-                return Err(RunFailure {
-                    kind: RunFailureKind::Deadline,
-                    detail: format!("scenario {scenario_id} outlived {deadline_ms} ms"),
-                });
+                executed.push(ran_nothing(
+                    claim,
+                    RunFailureKind::Deadline,
+                    format!("claim {} outlived {deadline_ms} ms", claim.id),
+                ));
+                continue;
             }
             Call::Refusal(error) => {
-                return Err(RunFailure {
-                    kind: RunFailureKind::Plugin,
-                    detail: format!(
-                        "scenario {scenario_id}: the plugin refused run ({}): {}",
-                        error.code, error.message
-                    ),
-                });
+                executed.push(ran_nothing(
+                    claim,
+                    RunFailureKind::Plugin,
+                    format!("the plugin refused run ({}): {}", error.code, error.message),
+                ));
+                continue;
             }
             Call::Lost(lost) => {
-                return Err(RunFailure {
-                    kind: RunFailureKind::Plugin,
-                    detail: format!("scenario {scenario_id}: {lost}"),
-                });
+                executed.push(ran_nothing(claim, RunFailureKind::Plugin, lost.to_string()));
+                continue;
             }
         };
         if !response.ok {
-            let failure = response.failure.unwrap_or(RunFailure {
-                kind: RunFailureKind::Plugin,
-                detail: "the plugin answered ok: false with no failure".to_string(),
-            });
-            return Err(RunFailure {
-                kind: failure.kind,
-                detail: format!("scenario {scenario_id}: {}", failure.detail),
-            });
+            // The plugin said the scenario did not run, and named the kind of nothing that
+            // happened; its own words travel with the claim's result.
+            let (kind, detail) = match response.failure {
+                Some(failure) => (failure.kind, failure.detail),
+                None => (
+                    RunFailureKind::Plugin,
+                    "the plugin answered ok: false with no failure".to_string(),
+                ),
+            };
+            executed.push(ran_nothing(claim, kind, detail));
+            continue;
         }
 
         let observed: Vec<(String, Value)> = response
@@ -133,11 +140,13 @@ pub fn execute(
             &mut missing_leaf,
         );
         if let Some(leaf_id) = missing_leaf {
-            // A `satisfies` leaf the plugin skipped is not a silent false.
-            return Err(RunFailure {
-                kind: RunFailureKind::Plugin,
-                detail: format!("plugin answered no result for leaf {leaf_id}"),
-            });
+            // A `satisfies` leaf the plugin skipped is not a silent false, and not a verdict.
+            executed.push(ran_nothing(
+                claim,
+                RunFailureKind::Plugin,
+                format!("the plugin answered no result for leaf {leaf_id}"),
+            ));
+            continue;
         }
 
         let outcome = if holds {
@@ -150,14 +159,23 @@ pub fn execute(
         } else {
             rendering(asserts, &observed)
         };
-        executed.push(Executed {
+        executed.push(Executed::Evaluated {
             claim_id: claim.id.clone(),
             outcome,
             observed: observed_lines,
         });
     }
 
-    Ok(executed)
+    executed
+}
+
+/// One claim's result when its scenario did not run: the kind, and the plugin's own words.
+fn ran_nothing(claim: &BoundClaim, kind: RunFailureKind, detail: String) -> Executed {
+    Executed::RunFailed {
+        claim_id: claim.id.clone(),
+        kind,
+        detail,
+    }
 }
 
 /// The plugin JSON-encodes each observed value, so `"2"` is the number 2 and an

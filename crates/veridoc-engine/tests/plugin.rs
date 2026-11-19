@@ -88,23 +88,20 @@ fn connect_handshakes_and_reports_the_declared_capabilities() {
         .payload()
         .unwrap();
     assert_eq!(collected.claims.len(), 1);
-    assert_eq!(collected.observables.len(), 2);
+    assert_eq!(collected.scenarios.len(), 1);
     let resolved = client
         .resolve(&["src/cli.ts|probe".into()])
         .payload()
         .unwrap();
     assert_eq!(resolved.resolved[0].referent_id, "veridoc:referent:probe");
+    let claim_id = collected.claims[0].id.clone();
+    assert!(collected.scenarios.contains_key(&claim_id));
     let run = client
         .run(
+            // The claim's id is the only address a run takes.
             &veridoc_protocol::RunRequest {
-                scenario_id: "config/rejects-missing-root".into(),
-                fixture: "empty-directory".into(),
-                action: "run-probe".into(),
-                args: vec![],
-                deadline_ms: 5_000,
-                leaves: vec![veridoc_protocol::RunLeaf {
-                    leaf_id: "probe#rejects-missing-project-root#l0".into(),
-                }],
+                claim: claim_id.clone(),
+                timeout_ms: 5_000,
             },
             // The engine's own wait for the scenario; the plugin's deadline is derived from it.
             Duration::from_secs(5),
@@ -113,6 +110,8 @@ fn connect_handshakes_and_reports_the_declared_capabilities() {
         .unwrap();
     assert!(run.ok);
     assert_eq!(run.observed[0].value, "2");
+    // The plugin answers the leaf its own claim's assertion tree implies.
+    assert_eq!(run.satisfied[0].leaf_id, format!("{claim_id}#l0"));
     assert!(run.satisfied[0].ok);
 }
 
@@ -278,12 +277,8 @@ fn a_sleeping_run_outliving_its_deadline_is_a_no_answer() {
     })));
     let call = client.run(
         &veridoc_protocol::RunRequest {
-            scenario_id: "config/rejects-missing-root".into(),
-            fixture: "empty-directory".into(),
-            action: "run-probe".into(),
-            args: vec![],
-            deadline_ms: 100,
-            leaves: vec![],
+            claim: "probe#rejects-missing-project-root".into(),
+            timeout_ms: 100,
         },
         Duration::from_millis(100),
     );

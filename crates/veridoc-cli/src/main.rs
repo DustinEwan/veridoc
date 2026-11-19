@@ -23,8 +23,8 @@ static PRESSES: AtomicU8 = AtomicU8::new(0);
     version,
     about = "documentation the build proves",
     after_help = "exit codes: 0 documentation built; 1 at least one blocking finding; \
-2 run failure (plugin unreachable, build or fixture failure, deadline, judge transport \
-error or unusable verdict, formatter exited non-zero); 3 usage or configuration error; \
+2 run failure (plugin unreachable, judge transport error or unusable verdict, formatter \
+exited non-zero); 3 usage or configuration error; \
 130 on a second Ctrl-C"
 )]
 struct Cli {

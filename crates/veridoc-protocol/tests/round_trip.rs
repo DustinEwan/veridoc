@@ -52,6 +52,7 @@ fn tree_clone_value(tree: &Asserts) -> Value {
 #[test]
 fn a_claim_round_trips_with_its_channel() {
     let claim = RawClaim {
+        id: "parseConfig#rejects-missing-project-root".into(),
         kind: Kind::Ensures,
         subject: RefToken::Symbol {
             name: "parseConfig".into(),
@@ -61,7 +62,6 @@ fn a_claim_round_trips_with_its_channel() {
         predicate: "rejects-missing-project-root".into(),
         text: "A missing project root is refused.".into(),
         channel: Channel {
-            scenario: Some("config/rejects-missing-root".into()),
             asserts: Some(Asserts::Leaf(AssertLeaf {
                 obs: "exit.code".into(),
                 r#is: Check::Equals(Value::from(2)),
@@ -74,7 +74,7 @@ fn a_claim_round_trips_with_its_channel() {
     };
     let value = serde_json::to_value(&claim).unwrap();
     assert_eq!(value["subject"]["kind"], "symbol");
-    assert_eq!(value["channel"]["scenario"], "config/rejects-missing-root");
+    assert_eq!(value["channel"]["asserts"]["obs"], "exit.code");
     assert_eq!(serde_json::from_value::<RawClaim>(value).unwrap(), claim);
     assert_eq!(claim.channel.populated(), 1);
     assert_eq!(claim.subject.key(), "src/scanner.ts|parseConfig");
@@ -90,15 +90,14 @@ fn a_claim_round_trips_with_its_channel() {
 #[test]
 fn channel_counts_its_populated_channels() {
     assert_eq!(Channel::default().populated(), 0);
-    let scenario = Channel {
-        scenario: Some("s".into()),
+    let one = Channel {
         asserts: Some(Asserts::Leaf(AssertLeaf {
             obs: "o".into(),
             r#is: Check::Equals(Value::from(1)),
         })),
         ..Channel::default()
     };
-    assert_eq!(scenario.populated(), 1);
+    assert_eq!(one.populated(), 1);
     let three = Channel {
         artefact: Some(Artefact {
             path: "a".into(),
@@ -109,7 +108,7 @@ fn channel_counts_its_populated_channels() {
             id: "01a1e512".into(),
             turn: Some(12),
         }),
-        ..scenario
+        ..one
     };
     assert_eq!(three.populated(), 3);
 }
@@ -117,15 +116,12 @@ fn channel_counts_its_populated_channels() {
 #[test]
 fn run_round_trips() {
     let req = RunRequest {
-        scenario_id: "config/rejects-missing-root".into(),
-        fixture: "empty-directory".into(),
-        action: "run-probe-plugin".into(),
-        args: vec![],
-        deadline_ms: 30_000,
-        leaves: vec![RunLeaf {
-            leaf_id: "c000000000000001#l0".into(),
-        }],
+        claim: "c000000000000001".into(),
+        timeout_ms: 30_000,
     };
+    let value = serde_json::to_value(&req).unwrap();
+    assert_eq!(value["claim"], "c000000000000001");
+    assert_eq!(value["timeoutMs"], 30_000);
     assert_eq!(
         serde_json::from_value::<RunRequest>(serde_json::to_value(&req).unwrap()).unwrap(),
         req
@@ -161,26 +157,29 @@ fn collect_round_trips() {
             not_applicable: None,
         }],
         claims: vec![],
-        observables: vec![ObservableDecl {
-            name: "exit.code".into(),
-            ty: "number".into(),
-        }],
-        actions: vec![ActionDecl {
-            name: "run-probe-plugin".into(),
-            calls: RefToken::Symbol {
-                name: "probe".into(),
-                from: "src/cli.ts".into(),
+        scenarios: [(
+            "c000000000000001".to_string(),
+            ScenarioDecl {
+                given: "an empty directory".into(),
+                when: "run probe-plugin in an empty directory".into(),
+                values: vec![ValueDecl {
+                    name: "exit.code".into(),
+                    kind: ValueKind::Number,
+                }],
             },
-            produces: vec!["exit.code".into()],
-        }],
-        fixtures: vec!["empty-directory".into()],
+        )]
+        .into_iter()
+        .collect(),
         skipped: vec![Skipped {
             file: "src/broken.doc.ts".into(),
             reason: "import threw".into(),
         }],
     };
     let value = serde_json::to_value(&result).unwrap();
-    assert_eq!(value["observables"][0]["type"], "number");
+    assert_eq!(
+        value["scenarios"]["c000000000000001"]["values"][0]["type"],
+        "number"
+    );
     assert_eq!(
         serde_json::from_value::<CollectResult>(value).unwrap(),
         result

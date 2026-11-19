@@ -50,13 +50,6 @@ const SPEC: &str = "<doc-section name=\"probe\">\n\
     \n\
     The scanner walks upward and stops at the first project root <doc-claim name=\"rejects-missing-project-root\"/>.\n";
 
-const FEATURE: &str = "Feature: project scan\n\
-    \n\
-    @id:config/rejects-missing-root\n\
-    Scenario: A missing project root is refused\n\
-    Given the empty-directory fixture\n\
-    When the run-probe action runs in that directory\n";
-
 /// A conforming project whose plugin is the fake, optionally scripted, with the answering
 /// model judge. Returns the project root and the mock provider its `judge.baseUrl` points at.
 fn scaffold(name: &str, script: Option<Value>) -> (PathBuf, Handle) {
@@ -72,9 +65,7 @@ fn scaffold_with(name: &str, script: Option<Value>, config_extra: Value) -> (Pat
     let root = tmp_dir(name);
     std::fs::create_dir_all(root.join(".veridoc")).unwrap();
     std::fs::create_dir_all(root.join("docs")).unwrap();
-    std::fs::create_dir_all(root.join("features")).unwrap();
     std::fs::write(root.join("docs/architecture.spec.md"), SPEC).unwrap();
-    std::fs::write(root.join("features/cli.feature"), FEATURE).unwrap();
 
     let plugin = match script {
         None => fakeplugin().to_string_lossy().into_owned(),
@@ -199,7 +190,7 @@ fn a_contradicted_claim_names_its_values_and_both_readings() {
 }
 
 #[test]
-fn a_fixture_failure_is_a_run_failure_with_the_plugins_kind() {
+fn a_fixture_failure_is_that_claims_result_and_the_build_finishes() {
     let (root, _judge) = scaffold(
         "fixture",
         Some(json!({
@@ -209,29 +200,36 @@ fn a_fixture_failure_is_a_run_failure_with_the_plugins_kind() {
             }
         })),
     );
-    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
-    assert_eq!(code, 2);
+    let (code, stdout, _stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
+    // Decision 0006: a scenario that cannot run is one claim's `run-failed` result, not a run
+    // failure. The build goes on, writes its document, and exits on its findings alone.
+    assert_eq!(code, 0);
     assert!(
-        stderr
-            .contains("run failed: fixture: scenario config/rejects-missing-root: fixture blew up"),
-        "stderr: {stderr}"
+        stdout.contains(
+            "claim probe#rejects-missing-project-root did not run: fixture: fixture blew up"
+        ),
+        "stdout: {stdout}"
     );
-    assert!(!root.join(".veridoc/result.json").is_file());
+    let result =
+        std::fs::read_to_string(root.join(".veridoc/result.json")).expect("the result document");
+    assert!(result.contains("\"run-failed\""), "result: {result}");
 }
 
 #[test]
-fn a_deadline_is_a_run_failure_of_kind_deadline() {
+fn a_deadline_is_that_claims_result_and_the_build_finishes() {
     let (root, _judge) = scaffold_with(
         "deadline",
         Some(json!({ "_sleepMs": { "run": 800 } })),
         json!({ "run": { "scenarioDeadlineMs": 50 } }),
     );
-    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
-    assert_eq!(code, 2);
+    let (code, stdout, _stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
+    assert_eq!(code, 0);
     assert!(
-        stderr
-            .contains("run failed: deadline: scenario config/rejects-missing-root outlived 50 ms"),
-        "stderr: {stderr}"
+        stdout.contains(
+            "claim probe#rejects-missing-project-root did not run: deadline: \
+             claim probe#rejects-missing-project-root outlived 50 ms"
+        ),
+        "stdout: {stdout}"
     );
 }
 
@@ -383,7 +381,7 @@ fn validate_plugin_validates_a_checkout_with_an_empty_registry() {
         "exit {:?}\nstdout: {stdout}\nstderr: {stderr}",
         output.status.code()
     );
-    assert!(stdout.contains("11 rules passed"), "stdout: {stdout}");
+    assert!(stdout.contains("12 rules passed"), "stdout: {stdout}");
 }
 
 #[test]

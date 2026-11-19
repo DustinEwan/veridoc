@@ -27,7 +27,7 @@
       "params": "docs/schema/veridoc-1/run-request.json",
       "result": "docs/schema/veridoc-1/run-response.json",
       "requiresCapability": "execution",
-      "deadlineField": "deadlineMs"
+      "deadlineField": "timeoutMs"
     },
     "cite": {
       "params": "docs/schema/veridoc-1/cite-req.json",
@@ -58,7 +58,7 @@
       "ifAbsent": "no claim may take the scenario channel, so every claim whose assertion could be checked is an error rather than a pass"
     },
     "execution": {
-      "ifAbsent": "scenarios are parsed and bound but never run, so every scenario-channel claim is an error rather than a pass"
+      "ifAbsent": "every claim arrives with its own scenario and none of them runs, so every scenario-channel claim is an error rather than a pass"
     },
     "citation": {
       "ifAbsent": "a `because` claim cannot resolve its reference, so it is an error rather than a pass"
@@ -76,7 +76,7 @@
       "eof": "the plugin closed its stdout with a call in flight: the same run failure and exit code 2, with the plugin's own stderr lines repeated as `plugin said: …`",
       "exited": "the plugin ended itself with a call in flight: the same run failure and exit code 2, naming the exit status the plugin left",
       "killed": "veridoc ended the plugin, by deadline or by interrupt: the same run failure and exit code 2, attributed to the host rather than to the project",
-      "noAnswer": "the wait passed with the request waiting: for `run` the scenario is a run failure of kind `deadline` carrying its own millisecond figure, and for any other method the run is a run failure with exit code 2",
+      "noAnswer": "the wait passed with the request waiting: for `run` the claim records a `run-failed` result of kind `deadline` carrying its own millisecond figure and the build goes on judging the rest, and for any other method the run is a run failure with exit code 2",
       "unusable-result": "the plugin answered a method in a shape veridoc/1 cannot read: the plugin counts as lost, so the run is a run failure with exit code 2 and `veridoc install-plugin` records nothing"
     },
     "added": ["unusable-result"]
@@ -125,8 +125,18 @@
         }
       },
       {
+        "id": "scenarios-declare-values",
+        "expectation": "every claim whose channel declares an assertion has a scenarios entry keyed by that claim's own id, and the entry declares a value of one of the five types for every value the assertion reads, with a string or an array under a contains check.",
+        "dependsOn": ["collect-schema"],
+        "defect": {
+          "run": ["target/release/veridoc-fakeplugin"],
+          "env": ["VERIDOC_FAKE_SCRIPT={\"_merge\":{\"collect\":{\"scenarios\":{}}}}"],
+          "expectViolation": ["scenarios-declare-values"]
+        }
+      },
+      {
         "id": "run-returns-values",
-        "expectation": "run answers an instance of docs/schema/veridoc-1/run-response.json with ok true, a value for every observable the emitted project declares, one satisfied answer for every leaf id the engine issued, and no field named outcome anywhere.",
+        "expectation": "run, asked for a claim by id alone, answers an instance of docs/schema/veridoc-1/run-response.json with ok true, a value for every name the emitted project declares for that claim's scenario, one satisfied answer for every leaf id the claim's own assertion tree implies, and no field named outcome anywhere.",
         "dependsOn": ["collect-schema", "resolve-known"],
         "defect": {
           "run": ["target/release/veridoc-fakeplugin"],

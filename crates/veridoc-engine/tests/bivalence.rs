@@ -30,10 +30,12 @@ fn scenario_claim() -> BoundClaim {
         referent_id: "veridoc:referent:probe".into(),
         signature: "function probe(dir: string): number".into(),
         channel: BoundChannel::Scenario {
-            scenario_id: "config/rejects-missing-root".into(),
-            fixture: "empty-directory".into(),
-            action: "run-probe".into(),
-            args: vec![],
+            given: "an empty directory".into(),
+            when: "run probe-plugin in an empty directory".into(),
+            values: vec![veridoc_protocol::ValueDecl {
+                name: "exit.code".into(),
+                kind: veridoc_protocol::ValueKind::Number,
+            }],
             asserts: Asserts::Leaf(AssertLeaf {
                 obs: "exit.code".into(),
                 r#is: Check::Equals(serde_json::json!(2)),

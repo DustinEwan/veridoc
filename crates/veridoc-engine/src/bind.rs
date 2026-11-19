@@ -1,8 +1,12 @@
 //! The bind stage: everything that must be true before anything runs. Order matters because
-//! later rules read earlier results: collect, resolve, identity, channel completeness,
-//! vocabulary, scenario bind, then the tree closed both ways. Every bind error blocks: the
-//! run stops before any `run` call, because a claim that cannot be bound has no channel to
-//! evaluate, and printing outcomes for the rest would bury the one thing the reader must fix.
+//! later rules read earlier results: collect, resolve, identity, channel completeness, then the
+//! claim's own scenario, then the tree closed both ways. Every bind error blocks: the run stops
+//! before any `run` call, because a claim that cannot be bound has no channel to evaluate, and
+//! printing outcomes for the rest would bury the one thing the reader must fix.
+//!
+//! The engine owns no scenario grammar and no project-wide vocabulary. A claim's scenario arrives
+//! with the claim, and the only names bind checks against are the values that scenario declares
+//! (`docs/decisions/0006-a-project-adds-three-files-and-the-scenario-belongs-to-the-claim.md`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -12,7 +16,6 @@ use serde_json::Value;
 use veridoc_protocol::*;
 
 use crate::config::CitationStoreConfig;
-use crate::feature::{self, FeatureFile, FeatureProblemKind};
 use crate::hash;
 use crate::plugin::sentence;
 use crate::result::Warning;
@@ -27,15 +30,17 @@ pub struct CollectWire {
     pub concepts: Vec<String>,
     pub documents: Vec<DocumentDecl>,
     pub claims: Vec<ClaimWire>,
-    pub observables: Vec<ObservableDecl>,
-    pub actions: Vec<ActionDecl>,
-    pub fixtures: Vec<String>,
+    pub scenarios: BTreeMap<String, ScenarioDecl>,
     pub skipped: Vec<Skipped>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClaimWire {
+    /// The plugin's own claim name, used verbatim: it is the address of the claim's scenario and
+    /// the name every surface prints. The engine does not re-derive it from the subject and the
+    /// predicate, because the runtime that owns that rule is the claim module's own.
+    pub id: String,
     pub kind: Kind,
     pub subject: RefToken,
     pub concept: String,
@@ -50,8 +55,6 @@ pub struct ClaimWire {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChannelWire {
     #[serde(default)]
-    pub scenario: Option<String>,
-    #[serde(default)]
     pub asserts: Option<Value>,
     #[serde(default)]
     pub artefact: Option<Artefact>,
@@ -61,8 +64,9 @@ pub struct ChannelWire {
 
 impl ChannelWire {
     fn populated(&self) -> usize {
-        let scenario = usize::from(self.scenario.is_some() || self.asserts.is_some());
-        scenario + usize::from(self.artefact.is_some()) + usize::from(self.citation.is_some())
+        usize::from(self.asserts.is_some())
+            + usize::from(self.artefact.is_some())
+            + usize::from(self.citation.is_some())
     }
 }
 
@@ -84,14 +88,8 @@ pub enum BindError {
         predicate: String,
         count: usize,
     },
-    #[error("scenario-channel claim {claim_id} names no scenario")]
+    #[error("claim {claim_id} declares an assertion with no scenario beside it; a checkable claim was left unevaluated")]
     NoScenario {
-        file: String,
-        line: u32,
-        claim_id: String,
-    },
-    #[error("scenario-channel claim {claim_id} declares no assertion tree")]
-    NoAsserts {
         file: String,
         line: u32,
         claim_id: String,
@@ -105,73 +103,12 @@ pub enum BindError {
         owner_file: String,
         owner_line: u32,
     },
-    #[error("scenario {scenario_id} acts on {action_referent}, not the claim's referent {claim_referent}")]
-    WrongReferent {
-        file: String,
-        line: u32,
-        scenario_id: String,
-        action_referent: String,
-        claim_referent: String,
-    },
-    #[error("claim {claim_id} reads observable {obs}, which action {action} cannot produce")]
-    Unproduced {
+    #[error("claim {claim_id} reads {value}, which its scenario does not declare")]
+    UndeclaredValue {
         file: String,
         line: u32,
         claim_id: String,
-        obs: String,
-        action: String,
-    },
-    #[error("observable {obs} is not declared by the plugin")]
-    UndeclaredObservable {
-        file: String,
-        line: u32,
-        obs: String,
-    },
-    #[error("scenario {scenario_id} refers to undeclared fixture {fixture}")]
-    UndeclaredFixture {
-        file: String,
-        line: u32,
-        scenario_id: String,
-        fixture: String,
-    },
-    #[error("scenario {scenario_id} names no declared action in {text}")]
-    UnknownAction {
-        file: String,
-        line: u32,
-        scenario_id: String,
-        text: String,
-    },
-    #[error("scenario {scenario_id} has no Given step; a scenario that refers to no fixture is not evidence")]
-    NoGiven {
-        file: String,
-        line: u32,
-        scenario_id: String,
-    },
-    #[error("scenario {scenario_id} has no When step; a scenario declares one action")]
-    NoWhen {
-        file: String,
-        line: u32,
-        scenario_id: String,
-    },
-    #[error("scenario has no @id:<slug> tag")]
-    ScenarioTag { file: String, line: u32 },
-    #[error("scenario step is not allowed: {text}; a scenario has one Given and one When, and the claim owns the assertion")]
-    ForbiddenStep {
-        file: String,
-        line: u32,
-        text: String,
-    },
-    #[error("unrecognized line in feature file: {text}")]
-    Unrecognized {
-        file: String,
-        line: u32,
-        text: String,
-    },
-    #[error("empty {what}")]
-    EmptyStep {
-        file: String,
-        line: u32,
-        what: String,
+        value: String,
     },
     #[error("section opens with no subject; write <doc-section name=\"<subject>\">")]
     SubjectName { file: String, line: u32 },
@@ -211,7 +148,7 @@ pub enum BindError {
         line: u32,
         claim_id: String,
     },
-    #[error("doc-each names no source; the collections are claims, concepts, documents, observables, actions, fixtures")]
+    #[error("doc-each names no source; the collections are claims, concepts, documents")]
     MissingSource { file: String, line: u32 },
     #[error("doc-each has no block after it to repeat")]
     MissingBlock { file: String, line: u32 },
@@ -266,7 +203,7 @@ pub enum BindError {
         claim_id: String,
         node: String,
     },
-    #[error("claim {claim_id} asserts contains over observable {obs} of type {ty}; it must be string or string[]")]
+    #[error("claim {claim_id} asserts contains over {obs}, which its scenario declares as {ty}; it must be string or array")]
     ContainsType {
         file: String,
         line: u32,
@@ -326,19 +263,8 @@ impl BindError {
             BindError::Unresolved { file, line, .. }
             | BindError::Channels { file, line, .. }
             | BindError::NoScenario { file, line, .. }
-            | BindError::NoAsserts { file, line, .. }
             | BindError::Duplicate { file, line, .. }
-            | BindError::WrongReferent { file, line, .. }
-            | BindError::Unproduced { file, line, .. }
-            | BindError::UndeclaredObservable { file, line, .. }
-            | BindError::UndeclaredFixture { file, line, .. }
-            | BindError::UnknownAction { file, line, .. }
-            | BindError::NoGiven { file, line, .. }
-            | BindError::NoWhen { file, line, .. }
-            | BindError::ScenarioTag { file, line }
-            | BindError::ForbiddenStep { file, line, .. }
-            | BindError::Unrecognized { file, line, .. }
-            | BindError::EmptyStep { file, line, .. }
+            | BindError::UndeclaredValue { file, line, .. }
             | BindError::SubjectName { file, line }
             | BindError::UnknownElement { file, line, .. }
             | BindError::MisplacedElement { file, line, .. }
@@ -393,21 +319,23 @@ pub struct BoundClaim {
     pub text: String,
     pub file: String,
     pub line: u32,
-    /// The author's name for the subject: the left half of `id`. The referent id below is a
-    /// reporting value and moves when a file is renamed; this does not.
+    /// The author's name for the subject. The referent id below is a reporting value and moves
+    /// when a file is renamed; this does not.
     pub subject: String,
     pub referent_id: String,
     pub signature: String,
     pub channel: BoundChannel,
 }
 
+/// The channel that will produce a claim's outcome. The scenario channel carries the claim's own
+/// scenario as `collect` reported it: the two step labels for the report, and the declared values
+/// the assertion tree is checked against.
 #[derive(Debug, Clone)]
 pub enum BoundChannel {
     Scenario {
-        scenario_id: String,
-        fixture: String,
-        action: String,
-        args: Vec<String>,
+        given: String,
+        when: String,
+        values: Vec<ValueDecl>,
         asserts: Asserts,
     },
     Artefact {
@@ -448,16 +376,14 @@ pub struct Injected {
     pub items: usize,
 }
 
-/// The whole bound project: what every later stage reads.
+/// The whole bound project: what every later stage reads. There is no vocabulary here: the values
+/// a claim's scenario produces travel inside that claim's channel.
 #[derive(Debug, Clone)]
 pub struct Bound {
     pub claims: Vec<BoundClaim>,
     pub sections: Vec<BoundSection>,
     pub documents: Vec<DocumentDecl>,
     pub concepts: Vec<String>,
-    pub observables: Vec<ObservableDecl>,
-    pub actions: Vec<ActionDecl>,
-    pub fixtures: Vec<String>,
     pub warnings: Vec<Warning>,
 }
 
@@ -488,7 +414,7 @@ pub fn bind(
     let mut claims = collect.claims.clone();
     claims.sort_by(|a, b| (&a.file, &a.predicate).cmp(&(&b.file, &b.predicate)));
 
-    // 2. One resolve call for every claim subject and every action call.
+    // 2. One resolve call for every claim subject.
     let mut keys: Vec<String> = Vec::new();
     let push_key = |keys: &mut Vec<String>, key: String| {
         if !keys.contains(&key) {
@@ -497,9 +423,6 @@ pub fn bind(
     };
     for claim in &claims {
         push_key(&mut keys, claim.subject.key());
-    }
-    for action in &collect.actions {
-        push_key(&mut keys, action.calls.key());
     }
     let resolved = sentence("resolve", resolve(&keys)).map_err(BindFailure::RunFailure)?;
     let mut referents: BTreeMap<String, (String, String)> = BTreeMap::new();
@@ -514,18 +437,8 @@ pub fn bind(
         unresolved.insert(u.reference.clone(), u.reason.clone());
     }
 
-    // Feature files, parsed by the engine because Gherkin is veridoc's own format.
-    let features = load_features(root, &mut errors);
-    let scenarios: Vec<&feature::Scenario> = features.iter().flat_map(|f| &f.scenarios).collect();
-
     // `.spec.md` files on disk, and the index closed against them.
     let spec_files = load_spec_files(root, &mut errors, &mut warnings);
-
-    let observable_types: BTreeMap<String, String> = collect
-        .observables
-        .iter()
-        .map(|o| (o.name.clone(), o.ty.clone()))
-        .collect();
 
     // 3-8. Per-claim rules.
     let mut bound: Vec<BoundClaim> = Vec::new();
@@ -548,11 +461,13 @@ pub fn bind(
                 continue;
             }
         };
-        // The identity is what a duplicate is judged on; the name is what every surface prints.
-        // Both take the author's subject name, not the resolved referent id (`0009`).
+        // The name is the plugin's own, used verbatim: the runtime that owns the
+        // `<subject>#<slug>` rule is the claim module's, and a second rule here would drift from
+        // it. The identity stays the engine's digest, which is what a duplicate is judged on and
+        // what separates two claims whose names collide (`0006`, `0009`).
         let subject = claim.subject.subject_name().to_string();
         let identity = hash::claim_identity(&subject, &claim.predicate);
-        let id = hash::claim_name(&subject, &claim.predicate);
+        let id = claim.id.clone();
         if let Some((owner_file, owner_line)) = owners.get(&identity) {
             errors.push(BindError::Duplicate {
                 file: claim.file.clone(),
@@ -581,25 +496,9 @@ pub fn bind(
             }
         }
 
-        let channel = if wire.scenario.is_some() || wire.asserts.is_some() {
-            let Some(scenario_id) = wire.scenario.clone() else {
-                errors.push(BindError::NoScenario {
-                    file: claim.file.clone(),
-                    line: claim.line,
-                    claim_id: id.clone(),
-                });
-                continue;
-            };
-            let Some(asserts_value) = wire.asserts.clone() else {
-                errors.push(BindError::NoAsserts {
-                    file: claim.file.clone(),
-                    line: claim.line,
-                    claim_id: id.clone(),
-                });
-                continue;
-            };
+        let channel = if let Some(asserts_value) = &wire.asserts {
             let asserts = match validate_asserts(
-                &asserts_value,
+                asserts_value,
                 "",
                 &id,
                 &claim.file,
@@ -630,9 +529,9 @@ pub fn bind(
                 });
                 continue;
             }
-            // Scenario bind: the scenario exists, its steps name declared things, and its
-            // action acts on the claim's own referent.
-            let Some(scenario) = scenarios.iter().copied().find(|s| s.id == scenario_id) else {
+            // The claim's own scenario, keyed by the claim's id. A claim that declares an
+            // assertion and has no scenario beside it is a checkable claim left unevaluated.
+            let Some(scenario) = collect.scenarios.get(&id) else {
                 errors.push(BindError::NoScenario {
                     file: claim.file.clone(),
                     line: claim.line,
@@ -640,105 +539,32 @@ pub fn bind(
                 });
                 continue;
             };
-            let scenario_file = features
-                .iter()
-                .find(|f| f.scenarios.iter().any(|s| s.id == scenario_id))
-                .map(|f| f.path.clone())
-                .unwrap_or_else(|| claim.file.clone());
-            let Some(given) = &scenario.given else {
-                errors.push(BindError::NoGiven {
-                    file: scenario_file.clone(),
-                    line: scenario.line,
-                    scenario_id: scenario_id.clone(),
-                });
-                continue;
-            };
-            let Some(fixture) = collect
-                .fixtures
-                .iter()
-                .find(|f| given.text.contains(f.as_str()))
-            else {
-                errors.push(BindError::UndeclaredFixture {
-                    file: scenario_file.clone(),
-                    line: given.line,
-                    scenario_id: scenario_id.clone(),
-                    fixture: given.text.clone(),
-                });
-                continue;
-            };
-            let Some(when) = &scenario.when else {
-                errors.push(BindError::NoWhen {
-                    file: scenario_file.clone(),
-                    line: scenario.line,
-                    scenario_id: scenario_id.clone(),
-                });
-                continue;
-            };
-            let Some(action) = collect.actions.iter().find(|a| when.text.contains(&a.name)) else {
-                errors.push(BindError::UnknownAction {
-                    file: scenario_file.clone(),
-                    line: when.line,
-                    scenario_id: scenario_id.clone(),
-                    text: when.text.clone(),
-                });
-                continue;
-            };
-            let action_key = action.calls.key();
-            let action_referent = match referents.get(&action_key) {
-                Some((id, _)) => id.clone(),
-                None => {
-                    let reason = unresolved.get(&action_key).cloned().unwrap_or_else(|| {
-                        "the plugin answered neither resolved nor unresolved".to_string()
-                    });
-                    errors.push(BindError::Unresolved {
-                        file: claim.file.clone(),
-                        line: claim.line,
-                        reference: action_key,
-                        reason,
-                    });
-                    continue;
-                }
-            };
-            if action_referent != referent_id {
-                errors.push(BindError::WrongReferent {
-                    file: claim.file.clone(),
-                    line: claim.line,
-                    scenario_id: scenario_id.clone(),
-                    action_referent,
-                    claim_referent: referent_id.clone(),
-                });
-                continue;
-            }
-            // Vocabulary: every observable an assertion reads is declared, and the action
-            // produces it. A `contains` over a non-string type is a bind error here too.
+            // The two checks the per-scenario declaration makes possible: every value an
+            // assertion reads is one that scenario declares, and a `contains` sits over a value
+            // whose declared type can hold one. The check that a `Given` named a declared fixture
+            // is gone with the registry, and that miss is now a run failure of this one claim.
             let mut bad = false;
             for (_, leaf) in asserts.leaves() {
-                let Some(ty) = observable_types.get(&leaf.obs) else {
-                    errors.push(BindError::UndeclaredObservable {
+                // The leaf's value name, spelled once: every message about this leaf names it.
+                let AssertLeaf { obs: name, .. } = leaf;
+                let name = name.clone();
+                let Some(value) = scenario.values.iter().find(|v| &v.name == &name) else {
+                    errors.push(BindError::UndeclaredValue {
                         file: claim.file.clone(),
                         line: claim.line,
-                        obs: leaf.obs.clone(),
+                        claim_id: id.clone(),
+                        value: name,
                     });
                     bad = true;
                     continue;
                 };
-                if !action.produces.iter().any(|p| p == &leaf.obs) {
-                    errors.push(BindError::Unproduced {
-                        file: claim.file.clone(),
-                        line: claim.line,
-                        claim_id: id.clone(),
-                        obs: leaf.obs.clone(),
-                        action: action.name.clone(),
-                    });
-                    bad = true;
-                }
-                if matches!(leaf.r#is, Check::Contains(_)) && !is_stringish(ty) {
+                if matches!(leaf.r#is, Check::Contains(_)) && !value.kind.holds_contains() {
                     errors.push(BindError::ContainsType {
                         file: claim.file.clone(),
                         line: claim.line,
                         claim_id: id.clone(),
-                        obs: leaf.obs.clone(),
-                        ty: ty.clone(),
+                        obs: name,
+                        ty: value.kind.name().to_string(),
                     });
                     bad = true;
                 }
@@ -747,10 +573,9 @@ pub fn bind(
                 continue;
             }
             BoundChannel::Scenario {
-                scenario_id,
-                fixture: fixture.clone(),
-                action: action.name.clone(),
-                args: vec![],
+                given: scenario.given.clone(),
+                when: scenario.when.clone(),
+                values: scenario.values.clone(),
                 asserts,
             }
         } else if let Some(artefact) = &wire.artefact {
@@ -1029,9 +854,6 @@ pub fn bind(
         sections,
         documents: collect.documents.clone(),
         concepts: collect.concepts.clone(),
-        observables: collect.observables.clone(),
-        actions: collect.actions.clone(),
-        fixtures: collect.fixtures.clone(),
         warnings,
     })
 }
@@ -1181,11 +1003,6 @@ fn bad_node(claim_id: &str, file: &str, line: u32, path: &str) -> BindError {
     }
 }
 
-fn is_stringish(ty: &str) -> bool {
-    let ty = ty.trim();
-    ty == "string" || ty == "string[]" || ty == "String" || ty == "String[]" || ty == "any"
-}
-
 /// True when the artefact path resolves outside the project root.
 fn escapes_root(root: &Path, path: &str) -> bool {
     let p = Path::new(path);
@@ -1213,62 +1030,6 @@ fn escapes_root(root: &Path, path: &str) -> bool {
         .into_iter()
         .collect::<PathBuf>()
         .starts_with(root)
-}
-
-fn load_features(root: &Path, errors: &mut Vec<BindError>) -> Vec<FeatureFile> {
-    let dir = root.join("features");
-    let mut files = Vec::new();
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return files;
-    };
-    let mut paths: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "feature"))
-        .collect();
-    paths.sort();
-    for path in paths {
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let rel = relative(root, &path);
-        let (parsed, problems) = feature::parse(&rel, &text);
-        for problem in problems {
-            errors.push(match problem.kind {
-                FeatureProblemKind::MissingTag => BindError::ScenarioTag {
-                    file: problem.file,
-                    line: problem.line,
-                },
-                FeatureProblemKind::ForbiddenStep(text) => BindError::ForbiddenStep {
-                    file: problem.file,
-                    line: problem.line,
-                    text,
-                },
-                FeatureProblemKind::SecondGiven => BindError::ForbiddenStep {
-                    file: problem.file,
-                    line: problem.line,
-                    text: "a second Given".to_string(),
-                },
-                FeatureProblemKind::SecondWhen => BindError::ForbiddenStep {
-                    file: problem.file,
-                    line: problem.line,
-                    text: "a second When".to_string(),
-                },
-                FeatureProblemKind::Empty(what) => BindError::EmptyStep {
-                    file: problem.file,
-                    line: problem.line,
-                    what,
-                },
-                FeatureProblemKind::Unrecognized(text) => BindError::Unrecognized {
-                    file: problem.file,
-                    line: problem.line,
-                    text,
-                },
-            });
-        }
-        files.push(parsed);
-    }
-    files
 }
 
 fn load_spec_files(
@@ -1364,9 +1125,6 @@ enum Source<'a> {
     Claims(Vec<&'a BoundClaim>),
     Concepts(&'a [String]),
     Documents(&'a [DocumentDecl]),
-    Observables(&'a [ObservableDecl]),
-    Actions(&'a [ActionDecl]),
-    Fixtures(&'a [String]),
 }
 
 impl<'a> Source<'a> {
@@ -1388,9 +1146,6 @@ impl<'a> Source<'a> {
             )),
             "concepts" => Some(Source::Concepts(&collect.concepts)),
             "documents" => Some(Source::Documents(&collect.documents)),
-            "observables" => Some(Source::Observables(&collect.observables)),
-            "actions" => Some(Source::Actions(&collect.actions)),
-            "fixtures" => Some(Source::Fixtures(&collect.fixtures)),
             _ => None,
         }
     }
@@ -1400,9 +1155,6 @@ impl<'a> Source<'a> {
             Source::Claims(items) => items.len(),
             Source::Concepts(items) => items.len(),
             Source::Documents(items) => items.len(),
-            Source::Observables(items) => items.len(),
-            Source::Actions(items) => items.len(),
-            Source::Fixtures(items) => items.len(),
         }
     }
 
@@ -1427,7 +1179,7 @@ impl<'a> Source<'a> {
                     _ => return None,
                 })
             }
-            Source::Concepts(names) | Source::Fixtures(names) => match field {
+            Source::Concepts(names) => match field {
                 "name" => names.get(item).cloned(),
                 _ => None,
             },
@@ -1437,23 +1189,6 @@ impl<'a> Source<'a> {
                     "path" => document.path.clone(),
                     "audience" => document.audience.clone(),
                     "question" => document.question.clone(),
-                    _ => return None,
-                })
-            }
-            Source::Observables(observables) => {
-                let observable = observables.get(item)?;
-                Some(match field {
-                    "name" => observable.name.clone(),
-                    "type" => observable.ty.clone(),
-                    _ => return None,
-                })
-            }
-            Source::Actions(actions) => {
-                let action = actions.get(item)?;
-                Some(match field {
-                    "name" => action.name.clone(),
-                    "calls" => action.calls.subject_name().to_string(),
-                    "produces" => action.produces.join(", "),
                     _ => return None,
                 })
             }

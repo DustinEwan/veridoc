@@ -1,7 +1,8 @@
-//! The typed payload every formatter consumes, and the engine-side schema root. Nothing in
-//! it can describe a run that stopped, because the run stops before the document is written:
-//! a bind error, a deadline, a judge transport error, and a formatter failure are diagnostics
-//! on the failure stream, and the run writes no document at all in those cases.
+//! The typed payload every formatter consumes, and the engine-side schema root. A claim whose
+//! own scenario could not run is in it, as `run-failed` with the plugin's words beside it: the
+//! unit of work is the claim, so a scenario that failed to run is one claim's result and the run
+//! still writes the document. A bind error, a judge transport error, and a formatter failure are
+//! still diagnostics on the failure stream, and the run writes no document at all in those cases.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -86,18 +87,24 @@ pub struct ClaimResult {
     /// Set on a `because` claim whose citation resolved but whose cited text could not be
     /// read. The single occupant of the residue metric.
     pub residue: bool,
-    /// Scenario id, artefact path, or verdict key.
+    /// The `When` label of the scenario that ran, the artefact path, the citation, the verdict
+    /// key, or — for a `run-failed` claim — the reason the scenario did not run.
     pub evidence: String,
 }
 
-/// Exactly two members. `Contradicted` is kept even though a contradicted claim ends the run
-/// before the document exists, so a formatter's `match` on the outcome is exhaustive and
-/// cannot default a non-`supported` claim to plain prose.
+/// Three members, and the third is the whole of what a scenario that never ran may say about the
+/// claim. `Contradicted` is kept even though a contradicted claim ends the run before the document
+/// exists, so a formatter's `match` on the outcome is exhaustive and cannot default a
+/// non-`supported` claim to plain prose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Outcome {
     Supported,
     Contradicted,
+    /// The scenario did not run. The claim is neither supported nor contradicted: no run that did
+    /// not happen is evidence either way.
+    #[serde(rename = "run-failed")]
+    RunFailed,
 }
 
 /// A warning carried for formatters that want them, beside the same line on stderr.

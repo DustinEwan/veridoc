@@ -28,17 +28,9 @@ const SPEC: &str = "<doc-section name=\"probe\">\n\
     \n\
     The scanner walks upward and stops at the first project root <doc-claim name=\"rejects-missing-project-root\"/>.\n";
 
-const FEATURE: &str = "Feature: project scan\n\
-    \n\
-    @id:config/rejects-missing-root\n\
-    Scenario: A missing project root is refused\n\
-    Given the empty-directory fixture\n\
-    When the run-probe action runs in that directory\n";
-
 fn scaffold(name: &str) -> PathBuf {
     let root = tmp_dir(name);
     write(&root, "docs/architecture.spec.md", SPEC);
-    write(&root, "features/cli.feature", FEATURE);
     root
 }
 
@@ -195,27 +187,8 @@ fn an_unresolved_referent_is_reported_with_the_plugin_reason() {
 }
 
 #[test]
-fn a_scenario_acting_on_another_referent_is_an_error() {
-    let root = scaffold("wrongref");
-    let mut wire = collect();
-    wire.actions[0].calls = veridoc_protocol::RefToken::Symbol {
-        name: "other".into(),
-        from: "src/cli.ts".into(),
-    };
-    let lines = diagnostics(run(&root, wire));
-    assert!(
-        lines[0].starts_with(
-            "src/cli.doc.ts:3: scenario config/rejects-missing-root acts on src/cli.ts|other, not the claim's referent veridoc:referent:probe"
-        ) || lines[0].starts_with(
-            "src/cli.doc.ts:3: referent src/cli.ts|other does not resolve"
-        ),
-        "got {lines:?}"
-    );
-}
-
-#[test]
-fn an_undeclared_observable_is_reported() {
-    let root = scaffold("obs");
+fn an_assertion_over_a_value_its_scenario_does_not_declare_is_refused() {
+    let root = scaffold("undeclared-value");
     let mut wire = collect();
     let mut value: Value = serde_json::to_value(&wire.claims[0].channel.asserts).unwrap();
     value["obs"] = json!("exit.unknown");
@@ -223,46 +196,19 @@ fn an_undeclared_observable_is_reported() {
     let lines = diagnostics(run(&root, wire));
     assert_eq!(
         lines[0],
-        "src/cli.doc.ts:3: observable exit.unknown is not declared by the plugin"
+        "src/cli.doc.ts:3: claim probe#rejects-missing-project-root reads exit.unknown, which its scenario does not declare"
     );
 }
 
 #[test]
-fn an_observable_the_action_cannot_produce_is_reported() {
-    let root = scaffold("produces");
+fn a_claim_that_declares_an_assertion_with_no_scenario_is_refused() {
+    let root = scaffold("no-scenario");
     let mut wire = collect();
-    wire.actions[0].produces = vec!["stderr.text".into()];
+    wire.scenarios.clear();
     let lines = diagnostics(run(&root, wire));
     assert_eq!(
         lines[0],
-        "src/cli.doc.ts:3: claim probe#rejects-missing-project-root reads observable exit.code, which action run-probe cannot produce"
-    );
-}
-
-#[test]
-fn a_scenario_naming_an_undeclared_fixture_is_reported() {
-    let root = scaffold("fixture");
-    let mut wire = collect();
-    wire.fixtures = vec!["some-other-fixture".into()];
-    let lines = diagnostics(run(&root, wire));
-    assert_eq!(
-        lines[0],
-        "features/cli.feature:5: scenario config/rejects-missing-root refers to undeclared fixture the empty-directory fixture"
-    );
-}
-
-#[test]
-fn a_scenario_without_its_tag_is_reported() {
-    let root = scaffold("notag");
-    write(
-        &root,
-        "features/cli.feature",
-        "Feature: project scan\n\nScenario: A missing project root is refused\n  Given the empty-directory fixture\n  When the run-probe action runs\n",
-    );
-    let lines = diagnostics(run(&root, collect()));
-    assert_eq!(
-        lines[0],
-        "features/cli.feature:3: scenario has no @id:<slug> tag"
+        "src/cli.doc.ts:3: claim probe#rejects-missing-project-root declares an assertion with no scenario beside it; a checkable claim was left unevaluated"
     );
 }
 
@@ -286,7 +232,6 @@ fn a_section_with_no_subject_is_reported() {
 fn a_citation_naming_an_undeclared_store_is_reported() {
     let root = scaffold("store");
     let mut wire = collect();
-    wire.claims[0].channel.scenario = None;
     wire.claims[0].channel.asserts = None;
     wire.claims[0].channel.citation = Some(veridoc_protocol::Citation {
         store: "tickets".into(),
@@ -407,7 +352,6 @@ fn a_not_applicable_node_with_a_reason_is_satisfied() {
 fn an_artefact_escaping_the_root_is_refused() {
     let root = scaffold("escape");
     let mut wire = collect();
-    wire.claims[0].channel.scenario = None;
     wire.claims[0].channel.asserts = None;
     wire.claims[0].channel.artefact = Some(veridoc_protocol::Artefact {
         path: "../outside.bin".into(),
@@ -421,7 +365,7 @@ fn an_artefact_escaping_the_root_is_refused() {
 }
 
 #[test]
-fn a_contains_over_a_number_observable_is_a_bind_error() {
+fn a_contains_over_a_declared_number_is_refused() {
     let root = scaffold("containstype");
     let mut wire = collect();
     let mut value: Value = serde_json::to_value(&wire.claims[0].channel.asserts).unwrap();
@@ -430,7 +374,7 @@ fn a_contains_over_a_number_observable_is_a_bind_error() {
     wire.claims[0].channel.asserts = Some(value);
     let lines = diagnostics(run(&root, wire));
     assert!(
-        lines[0].contains("asserts contains over observable exit.code of type number; it must be string or string[]"),
+        lines[0].contains("asserts contains over exit.code, which its scenario declares as number; it must be string or array"),
         "got {lines:?}"
     );
 }
@@ -552,7 +496,7 @@ fn two_predicates_that_slug_alike_keep_distinct_names() {
 
 // `doc-each` assembly (`docs/decisions/0011-an-authored-placeholder-pulls-its-content-at-assembly.md`).
 
-/// The happy-path section with one `doc-each` over the project's observables.
+/// The happy-path section with one `doc-each` over the project's concepts.
 fn injected_spec(source: &str, block: &str) -> String {
     format!(
         "<doc-section name=\"probe\">\n\nThe probe refuses a missing root <doc-claim name=\"rejects-missing-project-root\"/>.\n\n<doc-each source=\"{source}\">\n{block}\n"
@@ -562,7 +506,6 @@ fn injected_spec(source: &str, block: &str) -> String {
 fn scaffold_spec(name: &str, spec: &str) -> PathBuf {
     let root = tmp_dir(name);
     write(&root, "docs/architecture.spec.md", spec);
-    write(&root, "features/cli.feature", FEATURE);
     root
 }
 
@@ -570,10 +513,7 @@ fn scaffold_spec(name: &str, spec: &str) -> PathBuf {
 fn a_doc_each_repeats_its_block_once_per_value() {
     let root = scaffold_spec(
         "inject",
-        &injected_spec(
-            "observables",
-            "- <doc-value field=\"name\"/> is a <doc-value field=\"type\"/>",
-        ),
+        &injected_spec("concepts", "- <doc-value field=\"name\"/>"),
     );
     let bound = run(&root, collect()).expect("the injected project binds");
     let section = bound
@@ -584,10 +524,10 @@ fn a_doc_each_repeats_its_block_once_per_value() {
     assert_eq!(
         section.injections,
         vec![bind::Injected {
-            source: "observables".into(),
-            items: 2,
+            source: "concepts".into(),
+            items: 1,
         }],
-        "one element, two values"
+        "one element, one concept"
     );
     let texts: Vec<&str> = section
         .spans
@@ -595,7 +535,7 @@ fn a_doc_each_repeats_its_block_once_per_value() {
         .map(|span| span.text.as_str())
         .collect();
     assert!(
-        texts.contains(&"- exit.code is a number") && texts.contains(&"- stderr.text is a string"),
+        texts.contains(&"- project-scan"),
         "the spans the brief and the section hash read are the assembled ones: {texts:?}"
     );
 }
@@ -604,18 +544,15 @@ fn a_doc_each_repeats_its_block_once_per_value() {
 fn a_source_that_matches_nothing_stops_the_build() {
     let root = scaffold_spec(
         "inject-empty",
-        &injected_spec(
-            "observables",
-            "- <doc-value field=\"name\"/> is a <doc-value field=\"type\"/>",
-        ),
+        &injected_spec("concepts", "- <doc-value field=\"name\"/>"),
     );
     let mut wire = collect();
-    wire.observables.clear();
+    wire.concepts.clear();
     let lines = diagnostics(run(&root, wire));
     assert!(
         lines
             .iter()
-            .any(|line| line.ends_with("doc-each source observables matched nothing")),
+            .any(|line| line.ends_with("doc-each source concepts matched nothing")),
         "got {lines:?}"
     );
 }
@@ -639,13 +576,13 @@ fn a_source_naming_no_collection_stops_the_build() {
 fn a_field_the_collection_lacks_stops_the_build() {
     let root = scaffold_spec(
         "inject-field",
-        &injected_spec("observables", "- <doc-value field=\"colour\"/>"),
+        &injected_spec("concepts", "- <doc-value field=\"colour\"/>"),
     );
     let lines = diagnostics(run(&root, collect()));
     assert!(
         lines
             .iter()
-            .any(|line| line.ends_with("doc-each source observables has no field colour")),
+            .any(|line| line.ends_with("doc-each source concepts has no field colour")),
         "got {lines:?}"
     );
 }
@@ -683,7 +620,7 @@ fn a_doc_value_outside_a_block_stops_the_build() {
 fn a_doc_each_with_no_block_stops_the_build() {
     let root = scaffold_spec(
         "inject-block",
-        "<doc-section name=\"probe\">\n\nThe probe refuses a missing root <doc-claim name=\"rejects-missing-project-root\"/>.\n\n<doc-each source=\"observables\">\n",
+        "<doc-section name=\"probe\">\n\nThe probe refuses a missing root <doc-claim name=\"rejects-missing-project-root\"/>.\n\n<doc-each source=\"claims\">\n",
     );
     let lines = diagnostics(run(&root, collect()));
     assert!(

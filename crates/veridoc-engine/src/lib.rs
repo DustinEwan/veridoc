@@ -1,8 +1,8 @@
 //! veridoc policy: bind, gates, outcomes, brief, judge, cache, result, formatters.
 //!
-//! The engine never reads a source file of the target language. The only file formats it
-//! reads are `.veridoc/config.json`, `.spec.md`, `.feature`, `.veridoc/verdicts/*.json`, and
-//! the artefact and citation-store files its own claims name. The
+//! The engine never reads a source file of the target language, and it owns no scenario grammar:
+//! the only file formats it reads are `.veridoc/config.json`, `.spec.md`,
+//! `.veridoc/verdicts/*.json`, and the artefact and citation-store files its own claims name. The
 //! `tests/no_language_knowledge.rs` test asserts that boundary mechanically. The one place the
 //! engine touches a project source file is `inputs`, which hashes every tracked file, parsing
 //! none of them, to answer whether this checkout is the one the last run read.
@@ -16,7 +16,6 @@ pub mod config;
 pub mod derivability;
 pub mod diagnostic;
 pub mod execute;
-pub mod feature;
 pub mod format;
 pub mod git;
 pub mod hash;

@@ -6,6 +6,8 @@
 //! No policy lives in these types. `run` answers values, never a verdict: the engine evaluates
 //! the assertion tree so there is no path by which an author reports a pass.
 
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -97,12 +99,12 @@ impl RefToken {
 
 /// The single channel field of a claim. Flat, not externally tagged, so the wire shape
 /// matches the builder call and the "two channels or none" error is a direct count of the
-/// populated fields.
+/// populated fields. `asserts` is the scenario channel: the scenario belongs to the claim and
+/// arrives beside it in `CollectResult::scenarios`, so the channel carries the check and nothing
+/// else (`docs/decisions/0006-a-project-adds-three-files-and-the-scenario-belongs-to-the-claim.md`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Channel {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scenario: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asserts: Option<Asserts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -112,22 +114,23 @@ pub struct Channel {
 }
 
 impl Channel {
-    /// How many of the three channels (`scenario`+`asserts`, `artefact`, `citation`) are
-    /// populated. Exactly one is required; bind enforces it.
+    /// How many of the three channels (`asserts`, `artefact`, `citation`) are populated. Exactly
+    /// one is required; bind enforces it.
     pub fn populated(&self) -> usize {
-        let scenario = if self.scenario.is_some() || self.asserts.is_some() {
-            1
-        } else {
-            0
-        };
-        scenario + usize::from(self.artefact.is_some()) + usize::from(self.citation.is_some())
+        usize::from(self.asserts.is_some())
+            + usize::from(self.artefact.is_some())
+            + usize::from(self.citation.is_some())
     }
 }
 
-/// One declared claim, exactly as the sidecar registered it.
+/// One declared claim, exactly as the sidecar registered it. The `id` is the plugin's: the
+/// `<referent>#<predicate>` name the claim's own runtime derived, which the engine uses verbatim
+/// rather than re-slugging the predicate and drifting from it. It is the address of the claim's
+/// scenario in `CollectResult::scenarios` and the only thing `run` is asked for.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RawClaim {
+    pub id: String,
     pub kind: Kind,
     pub subject: RefToken,
     pub concept: String,
@@ -236,22 +239,58 @@ pub struct DocumentDecl {
     pub not_applicable: Option<String>,
 }
 
-/// A declared observable with its declared type name.
+/// One claim's scenario: its two step labels, and the names and types of the values its world
+/// and call produce. It has no identity of its own — it is addressed by the claim's id — and the
+/// declaration is what lets the engine refuse `contains` over a number instead of evaluating it
+/// to false (`docs/decisions/0006-a-project-adds-three-files-and-the-scenario-belongs-to-the-claim.md`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ObservableDecl {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub ty: String,
+pub struct ScenarioDecl {
+    /// The world, as an author wrote it: a report prints `Given an empty directory`.
+    pub given: String,
+    /// The call, as an author wrote it. The plugin resolves it to code; the engine never parses it.
+    pub when: String,
+    pub values: Vec<ValueDecl>,
 }
 
-/// A declared action: the symbol it calls and the observables it produces.
+/// One value a scenario produces: the name an assertion reads, and the type that makes a check
+/// over it decidable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ActionDecl {
+pub struct ValueDecl {
     pub name: String,
-    pub calls: RefToken,
-    pub produces: Vec<String>,
+    #[serde(rename = "type")]
+    pub kind: ValueKind,
+}
+
+/// The declared type of a scenario value, spelled the five lowercase names the profile publishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ValueKind {
+    String,
+    Number,
+    Boolean,
+    Array,
+    Object,
+}
+
+impl ValueKind {
+    /// Whether a `contains` check can hold over this type: a substring of a string, or an element
+    /// of an array. Over anything else the check could never pass, so bind refuses it.
+    pub fn holds_contains(&self) -> bool {
+        matches!(self, ValueKind::String | ValueKind::Array)
+    }
+
+    /// The declared name, as it appears in `collect-result.json`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            ValueKind::String => "string",
+            ValueKind::Number => "number",
+            ValueKind::Boolean => "boolean",
+            ValueKind::Array => "array",
+            ValueKind::Object => "object",
+        }
+    }
 }
 
 /// A sidecar that would not import. The engine reports it as a run failure, because a
@@ -298,16 +337,17 @@ pub struct CollectReq {
     pub root: String,
 }
 
-/// What `collect` reports: the index, the raw claims, and the observable/action vocabulary.
+/// What `collect` reports: the index, the raw claims, and each claim's own scenario. There is no
+/// project-wide vocabulary any more: the values a scenario produces are declared by that
+/// scenario, keyed by the claim's id, and a claim with no entry is judged by prose and source
+/// only (`docs/decisions/0006-a-project-adds-three-files-and-the-scenario-belongs-to-the-claim.md`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CollectResult {
     pub concepts: Vec<String>,
     pub documents: Vec<DocumentDecl>,
     pub claims: Vec<RawClaim>,
-    pub observables: Vec<ObservableDecl>,
-    pub actions: Vec<ActionDecl>,
-    pub fixtures: Vec<String>,
+    pub scenarios: BTreeMap<String, ScenarioDecl>,
     pub skipped: Vec<Skipped>,
 }
 
@@ -392,34 +432,34 @@ pub struct BivalenceResult {
     pub reason: Option<String>,
 }
 
-/// One leaf the engine asks the plugin to evaluate, addressed by the id the engine issued.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunLeaf {
-    pub leaf_id: String,
-}
-
-/// One scenario run. The engine parses the scenario and passes the leaves; the plugin answers
-/// values and never a verdict.
+/// One scenario run, addressed by the claim it belongs to. The scenario has no identity of its
+/// own and no action or fixture name travels: the claim's id is the only address, and the plugin
+/// runs the code that was declared beside that claim
+/// (`docs/decisions/0006-a-project-adds-three-files-and-the-scenario-belongs-to-the-claim.md`).
+///
+/// A scenario that cannot run answers a JSON-RPC error with code `-32000` and a message naming
+/// the claim; the host records that as the claim's `run-failed` result and keeps judging.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunRequest {
-    pub scenario_id: String,
-    pub fixture: String,
-    pub action: String,
-    pub args: Vec<String>,
-    pub deadline_ms: u64,
-    pub leaves: Vec<RunLeaf>,
+    pub claim: String,
+    /// The engine's own wait, so the plugin can stop itself before the host kills the call.
+    pub timeout_ms: u64,
 }
 
+/// One value the run produced: the name the claim's scenario declares for it, and the value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Observed {
+    /// One of the `values` names that claim's scenario declares.
     pub observable: String,
     /// The value JSON-encoded by the plugin, so `{"equals":2}` matches the string `"2"`.
     pub value: String,
 }
 
+/// One `satisfies` leaf the plugin evaluated. The engine sends no leaf ids: `{claimId}#l{n}`, in
+/// the pre-order walk of the claim's own assertion tree, is computable from the claim's id and
+/// the tree the plugin declared, so the answer arrives keyed the way the engine reads it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LeafAnswer {
@@ -427,7 +467,10 @@ pub struct LeafAnswer {
     pub ok: bool,
 }
 
-/// Why a scenario could not run. Never a claim state.
+/// Why a scenario could not run. Never a claim stronger than `run-failed`, and never the whole
+/// build's result (`docs/decisions/0006-a-project-adds-three-files-and-the-scenario-belongs-to-the-claim.md`).
+/// `Fixture` is the scenario's own world or the assets it reads, not a declared fixture: with no
+/// fixture registry there is no name to check before the run, so a missing world is discovered here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum RunFailureKind {
