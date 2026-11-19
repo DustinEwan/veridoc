@@ -548,7 +548,7 @@ pub fn bind(
                 // The leaf's value name, spelled once: every message about this leaf names it.
                 let AssertLeaf { obs: name, .. } = leaf;
                 let name = name.clone();
-                let Some(value) = scenario.values.iter().find(|v| &v.name == &name) else {
+                let Some(value) = scenario.values.iter().find(|v| v.name == name) else {
                     errors.push(BindError::UndeclaredValue {
                         file: claim.file.clone(),
                         line: claim.line,
