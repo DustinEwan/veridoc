@@ -195,29 +195,22 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Every rule a plugin-driving command depends on, the plugin launch included.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        self.validate_record()?;
+        self.validate_plugin()
+    }
+
+    /// Every rule except the plugin launch. `veridoc stat` starts no plugin, so a project whose
+    /// plugin is named but not installed still gets its record compared: the gate for a job that
+    /// cannot call a model must not need a job that can build a plugin (`docs/decisions/0014`).
+    pub fn validate_record(&self) -> Result<(), ConfigError> {
         if self.protocol != veridoc_protocol::PROTOCOL_VERSION {
             return Err(ConfigError::msg(format!(
                 "protocol \"{}\" is not supported; this build speaks \"{}\"",
                 self.protocol,
                 veridoc_protocol::PROTOCOL_VERSION
             )));
-        }
-        if self.plugin.command.as_deref().unwrap_or(&[]).is_empty() {
-            // A missing `command` is only legal when the name is installed: the registry
-            // holds argv the user installed on purpose, so the engine never guesses a
-            // runtime, and an uninstalled name fails at load, not at the first spawn.
-            let name = self.plugin.name.as_deref().unwrap_or("");
-            if name.is_empty() {
-                return Err(ConfigError::msg(
-                    "plugin.command is required, or plugin.name must name an installed plugin",
-                ));
-            }
-            if crate::plugins::lookup(name).is_none() {
-                return Err(ConfigError::msg(format!(
-                    "`command` is required for plugin \"{name}\". Install it with `veridoc install-plugin <git-url>`, or set `plugin.command`."
-                )));
-            }
         }
         if !(0.0..=1.0).contains(&self.coverage.required) {
             return Err(ConfigError::msg(
@@ -255,6 +248,27 @@ impl Config {
                 )));
             }
             seen.push(store.name.as_str());
+        }
+        Ok(())
+    }
+
+    /// The plugin can be launched: a `command` in the config, or a name the registry holds.
+    fn validate_plugin(&self) -> Result<(), ConfigError> {
+        if self.plugin.command.as_deref().unwrap_or(&[]).is_empty() {
+            // A missing `command` is only legal when the name is installed: the registry
+            // holds argv the user installed on purpose, so the engine never guesses a
+            // runtime, and an uninstalled name fails at load, not at the first spawn.
+            let name = self.plugin.name.as_deref().unwrap_or("");
+            if name.is_empty() {
+                return Err(ConfigError::msg(
+                    "plugin.command is required, or plugin.name must name an installed plugin",
+                ));
+            }
+            if crate::plugins::lookup(name).is_none() {
+                return Err(ConfigError::msg(format!(
+                    "`command` is required for plugin \"{name}\". Install it with `veridoc install-plugin <git-url>`, or set `plugin.command`."
+                )));
+            }
         }
         Ok(())
     }
@@ -395,9 +409,23 @@ pub fn absolutized(
         .unwrap_or(argument)
 }
 
-/// Load and validate `.veridoc/config.json`. The project root is the directory that holds
-/// `.veridoc/`.
+/// Load and validate `.veridoc/config.json` for a command that drives a plugin.
 pub fn load(path: &Path) -> Result<LoadedConfig, ConfigError> {
+    load_with(path, Config::validate)
+}
+
+/// Read and validate the configuration for a command that starts no plugin: `veridoc stat`. A
+/// project whose plugin is named but not installed has a record to compare, and the gate that reads
+/// it must not be the gate that builds a plugin (`docs/decisions/0014`).
+pub fn load_without_plugin(path: &Path) -> Result<LoadedConfig, ConfigError> {
+    load_with(path, Config::validate_record)
+}
+
+/// The shared read: the project root is the directory that holds `.veridoc/`.
+fn load_with(
+    path: &Path,
+    validate: fn(&Config) -> Result<(), ConfigError>,
+) -> Result<LoadedConfig, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|e| ConfigError::Read {
         path: path.to_path_buf(),
         source: e,
@@ -406,7 +434,7 @@ pub fn load(path: &Path) -> Result<LoadedConfig, ConfigError> {
         path: path.to_path_buf(),
         source: e,
     })?;
-    config.validate()?;
+    validate(&config)?;
     let abs = absolute(path)?;
     let root = abs
         .parent() // .veridoc/

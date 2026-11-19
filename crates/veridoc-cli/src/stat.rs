@@ -1,7 +1,8 @@
 //! `veridoc stat`: the gate for a job that cannot call a model. Report whether this checkout is the
 //! one the last completed run recorded, by comparing every file the commit would carry against
-//! `.veridoc/inputs.json`. No plugin is started, no scenario harness is built, and no model is
-//! asked anything, so the gate costs a directory of hashes (`docs/decisions/0014`).
+//! `.veridoc/inputs.json`. No plugin is started, no scenario harness is built, and no model is asked
+//! anything, so the gate costs a directory of hashes and the project's plugin need not even be
+//! installed (`docs/decisions/0014`).
 //!
 //! Unlike `stat(1)` and `git status`, this reports through the exit code, because the reader is a
 //! job that looks at nothing else: `0` the record covers this checkout, `1` it does not, `3` there
@@ -16,7 +17,7 @@ const PRINTED: usize = 20;
 
 pub fn run(project: &Path) -> Result<i32, String> {
     let path = config::discover(project).map_err(|e| e.to_string())?;
-    let loaded = config::load(&path).map_err(|e| e.to_string())?;
+    let loaded = config::load_without_plugin(&path).map_err(|e| e.to_string())?;
     let root = loaded.root.as_path();
     let Some(recorded) = inputs::read(root).map_err(|e| e.to_string())? else {
         return Err(format!(

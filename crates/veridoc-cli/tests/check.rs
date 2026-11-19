@@ -466,6 +466,35 @@ fn stat_without_a_record_names_the_run_it_needs() {
     );
 }
 
+/// The case a CI job is in: the checkout and the committed record are there, the plugin is not.
+/// `stat` compares hashes and launches nothing, so a `plugin.name` the registry does not hold is not
+/// its failure to report.
+#[test]
+fn stat_needs_the_record_and_not_an_installed_plugin() {
+    let (root, _judge) = scaffold("stat-no-plugin", None);
+    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let config = root.join(".veridoc/config.json");
+    let mut value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    value["plugin"] = json!({ "name": "veridoc-plugin-not-installed" });
+    std::fs::write(&config, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    let (code, stdout, stderr) = veridoc(&["stat", "--project", root.to_str().unwrap()]);
+    let printed = format!("{stdout}{stderr}");
+    assert_ne!(
+        code, 3,
+        "stat refused to read a configuration whose plugin is not installed: {printed}"
+    );
+    assert!(
+        !printed.contains("install-plugin"),
+        "stat asked for a plugin it never starts: {printed}"
+    );
+    assert!(
+        printed.contains("changed  .veridoc/config.json") && printed.contains("record stale"),
+        "the edit to the configuration is a changed input the record has to name: {printed}"
+    );
+}
+
 /// `veridoc init` names the plugin, writes the configuration, and lets the plugin create the files
 /// only it can write. Flags answer every question, so the test needs no terminal.
 #[test]
