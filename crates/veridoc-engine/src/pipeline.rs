@@ -655,6 +655,29 @@ fn make_judge(loaded: &LoadedConfig) -> Result<Option<Box<dyn Judge>>, String> {
         .base_url
         .clone()
         .unwrap_or_else(|| provider.default_base_url().to_string());
+    // A `${NAME}` that nothing supplied stays exactly as written in the loaded config
+    // (`config.rs`), because the file has to load on a machine that has no local model server.
+    // Reaching a judge with one still in it would ask a real endpoint for a model named `${…}`,
+    // so the run stops here and names the variable instead.
+    for (field, value) in [
+        ("judge.provider", judge.provider.as_str()),
+        ("judge.model", judge.model.as_str()),
+        ("judge.baseUrl", base.as_str()),
+    ] {
+        if let Some(name) = unresolved(value) {
+            return Err(format!(
+                "{field} reads {value}: {name} is set neither in the environment nor in .env"
+            ));
+        }
+    }
+    // dotenvy turns `${OTHER}` in a `.env` value into nothing when that name is unset, so an empty
+    // string can reach here with no `${` left for the loop above to report.
+    if base.is_empty() {
+        return Err(
+            "judge.baseUrl resolved to nothing: the name the configuration gives holds no value here"
+                .to_string(),
+        );
+    }
     Ok(Some(Box::new(ModelJudge {
         provider,
         model: judge.model.clone(),
@@ -666,6 +689,13 @@ fn make_judge(loaded: &LoadedConfig) -> Result<Option<Box<dyn Judge>>, String> {
         additional_params: judge.additional_params.clone().unwrap_or(Value::Null),
         timeout: Duration::from_millis(judge.timeout_ms),
     })))
+}
+
+/// The first `${NAME}` a config string still carries, which is a name nothing supplied.
+fn unresolved(value: &str) -> Option<&str> {
+    let at = value.find("${")?;
+    let end = value[at..].find('}')?;
+    Some(&value[at + 2..at + end])
 }
 
 // A judge transport failure raised inside the citation `judge` callback, which must return

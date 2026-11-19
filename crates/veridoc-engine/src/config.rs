@@ -3,6 +3,7 @@
 //! rather than a silently disabled check, so a project carrying a `semanticRules` block from
 //! the draft spec fails with `unknown field semanticRules` instead of ignoring it.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,12 @@ use crate::plugin::Launch;
 
 pub const CONFIG_DIR: &str = ".veridoc";
 pub const CONFIG_FILE_NAME: &str = "config.json";
+
+/// The environment file a project keeps at its root: `<root>/.env`. It holds the values the
+/// machine supplies and the repository must not carry, such as the address of a local model
+/// server. Git ignores it by convention, and the input record never covers it, so a run on a
+/// developer's machine and a gate in continuous integration read the same configuration file.
+pub const DOTENV_FILE: &str = ".env";
 
 /// Validation and user-facing failure messages share these strings, so a test can assert the
 /// exact wording.
@@ -426,26 +433,90 @@ fn load_with(
     path: &Path,
     validate: fn(&Config) -> Result<(), ConfigError>,
 ) -> Result<LoadedConfig, ConfigError> {
-    let text = std::fs::read_to_string(path).map_err(|e| ConfigError::Read {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    let config: Config = serde_json::from_str(&text).map_err(|e| ConfigError::Parse {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    validate(&config)?;
     let abs = absolute(path)?;
     let root = abs
         .parent() // .veridoc/
         .and_then(Path::parent)
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
+    let text = std::fs::read_to_string(path).map_err(|e| ConfigError::Read {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    let mut value: Value = serde_json::from_str(&text).map_err(|e| ConfigError::Parse {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    expand(&mut value, &dotenv(&root));
+    let config: Config = serde_json::from_value(value).map_err(|e| ConfigError::Parse {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    validate(&config)?;
     Ok(LoadedConfig {
         root,
         path: abs,
         config,
     })
+}
+
+/// The values `<root>/.env` declares, parsed by dotenvy. A missing file declares nothing, and a line
+/// dotenvy rejects is skipped rather than fatal, because a commented-out experiment in a machine's own
+/// file must not stop a run. dotenvy expands `${OTHER}` inside a value the way dotenv always has, so
+/// a value that must stay verbatim cannot contain `${`; the engine's own substitution runs later, over
+/// the configuration text (`substitute`).
+fn dotenv(root: &Path) -> BTreeMap<String, String> {
+    let Ok(entries) = dotenvy::from_path_iter(root.join(DOTENV_FILE)) else {
+        return BTreeMap::new();
+    };
+    entries.flatten().collect()
+}
+
+/// Substitute `${NAME}` in every string the configuration holds, from the process environment
+/// first and `<root>/.env` second. A name nothing supplies is left exactly as written, because the
+/// configuration has to load on a machine that has no local model server, which is the state of a
+/// continuous-integration job that never calls one. The command that needs the value reports the
+/// name (`make_judge` in `pipeline.rs`).
+fn expand(value: &mut Value, local: &BTreeMap<String, String>) {
+    match value {
+        Value::String(text) => *text = substitute(text, local),
+        Value::Array(items) => {
+            for item in items {
+                expand(item, local);
+            }
+        }
+        Value::Object(fields) => {
+            for (_, item) in fields {
+                expand(item, local);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The `${NAME}` occurrences in one string, resolved.
+fn substitute(text: &str, local: &BTreeMap<String, String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("${") {
+        out.push_str(&rest[..at]);
+        let Some(end) = rest[at..].find('}') else {
+            out.push_str(&rest[at..]);
+            return out;
+        };
+        let written = &rest[..at + end + 1];
+        let name = &rest[at + 2..at + end];
+        match std::env::var(name)
+            .ok()
+            .or_else(|| local.get(name).cloned())
+        {
+            Some(found) => out.push_str(&found),
+            None => out.push_str(written),
+        }
+        rest = &rest[at + end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Find `.veridoc/config.json`. A directory argument is searched, then upward; a file path is

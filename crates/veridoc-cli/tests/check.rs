@@ -551,6 +551,98 @@ fn the_rendered_page_is_the_prose_and_nothing_else() {
     }
 }
 
+/// The address of a local model server belongs to the machine and not to the repository, so the
+/// configuration names it `${NAME}` and `<root>/.env` supplies the value. The record must not cover
+/// that file, or the gate would compare a developer's machine against a runner that has no server.
+#[test]
+fn the_environment_file_supplies_the_judge_endpoint() {
+    let (root, judge) = scaffold_with(
+        "dotenv-endpoint",
+        None,
+        json!({ "judge": {
+            "provider": "openai",
+            "model": "scripted",
+            "baseUrl": "${VERIDOC_TEST_URL}",
+            "apiKeyEnv": "VERIDOC_TEST_JUDGE_KEY",
+            "timeoutMs": 10000,
+            "maxTokens": 1000,
+        } }),
+    );
+    std::fs::write(
+        root.join(".env"),
+        format!(
+            "# the server this machine runs\nVERIDOC_TEST_URL={}\n",
+            judge.base_url()
+        ),
+    )
+    .unwrap();
+    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let record = std::fs::read_to_string(root.join(".veridoc/inputs.json")).unwrap();
+    assert!(
+        !record.contains(".env"),
+        "the machine's own file must not enter the record: {record}"
+    );
+}
+
+/// A `${NAME}` nothing supplied stays exactly as written in the loaded configuration, because the
+/// file has to load where the server does not exist. The run that needs the value is the one that
+/// says which name is missing, rather than asking an endpoint for a model named `${…}`.
+#[test]
+fn an_unresolved_endpoint_names_the_variable() {
+    let (root, _judge) = scaffold_with(
+        "dotenv-unresolved",
+        None,
+        json!({ "judge": {
+            "provider": "openai",
+            "model": "scripted",
+            "baseUrl": "${VERIDOC_TEST_UNSET_URL}",
+            "apiKeyEnv": "VERIDOC_TEST_JUDGE_KEY",
+            "timeoutMs": 10000,
+            "maxTokens": 1000,
+        } }),
+    );
+    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
+    assert_ne!(
+        code, 0,
+        "an unresolved endpoint must fail the run: {stderr}"
+    );
+    assert!(
+        stderr.contains("VERIDOC_TEST_UNSET_URL"),
+        "the failure must name the variable: {stderr}"
+    );
+}
+
+/// A `.env` value that names another name nothing supplies expands to nothing, which is what dotenv
+/// has always done. The run then says the endpoint is empty instead of handing the HTTP client a
+/// blank URL and reporting the client's own error.
+#[test]
+fn an_empty_endpoint_after_expansion_says_so() {
+    let (root, _judge) = scaffold_with(
+        "dotenv-empty",
+        None,
+        json!({ "judge": {
+            "provider": "openai",
+            "model": "scripted",
+            "baseUrl": "${VERIDOC_TEST_CHAIN}",
+            "apiKeyEnv": "VERIDOC_TEST_JUDGE_KEY",
+            "timeoutMs": 10000,
+            "maxTokens": 1000,
+        } }),
+    );
+    std::fs::write(
+        root.join(".env"),
+        "VERIDOC_TEST_CHAIN=${VERIDOC_TEST_UNSET}\n",
+    )
+    .unwrap();
+    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
+    assert_ne!(code, 0, "an empty endpoint must fail the run: {stderr}");
+    assert!(
+        stderr.contains("resolved to nothing"),
+        "the failure must say the endpoint is empty: {stderr}"
+    );
+}
+
 /// `veridoc init` names the plugin, writes the configuration, and lets the plugin create the files
 /// only it can write. Flags answer every question, so the test needs no terminal.
 #[test]

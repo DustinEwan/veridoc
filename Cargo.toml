@@ -39,5 +39,10 @@ ctrlc = "3"
 # only the paths written, which is what a scripted run reads.
 dialoguer = { version = "0.12.0", default-features = false }
 
+# `<project>/.env` holds the values a machine supplies, such as the address of a local model server.
+# dotenvy parses it and expands `${OTHER}` inside a value, which is dotenv's ordinary behaviour; the
+# engine's own `${NAME}` substitution happens later, over the configuration text (`config.rs`).
+dotenvy = "0.15.7"
+
 [profile.release]
 overflow-checks = true

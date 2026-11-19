@@ -33,6 +33,12 @@ const EXCLUDED_DIRS: &[&str] = &[
     "__pycache__",
 ];
 
+/// Files that hold a machine's own values, read when the configuration loads. A git checkout
+/// already keeps them out of the record through the ignore rules; this list is what keeps a
+/// directory that is not a checkout from hashing them, because a record that differs between a
+/// developer's machine and a continuous-integration runner answers the wrong question.
+const EXCLUDED_NAMES: &[&str] = &[".env"];
+
 /// The files a run produces inside `.veridoc/`, which the fingerprint must not cover: covering
 /// them would make every run's own output invalidate it.
 const RECORD_OUTPUTS: &[&str] = &[
@@ -114,6 +120,9 @@ fn is_input(relative: &str) -> bool {
         return false;
     };
     if EXCLUDED_DIRS.contains(&first) {
+        return false;
+    }
+    if EXCLUDED_NAMES.contains(&first) {
         return false;
     }
     if first != CONFIG_DIR {
