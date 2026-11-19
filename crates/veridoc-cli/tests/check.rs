@@ -520,6 +520,37 @@ fn stat_ignores_the_documentation_the_run_rendered() {
     );
 }
 
+/// The rendered page is what a reader of the documentation wants: the prose as authored, with the
+/// `<doc-claim>` marker resolved out of the sentence, and none of the run's own verdicts, subjects,
+/// or metrics. Those live in `.veridoc/result.json`.
+#[test]
+fn the_rendered_page_is_the_prose_and_nothing_else() {
+    let (root, _judge) = scaffold_with(
+        "rendered-prose",
+        None,
+        json!({ "output": { "dir": "website", "formatters": ["markdown"] } }),
+    );
+    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let page = std::fs::read_to_string(root.join("website/markdown/docs/architecture.md")).unwrap();
+    assert!(
+        page.contains("The scanner walks upward and stops at the first project root.\n"),
+        "the sentence must read as authored, with the marker removed: {page}"
+    );
+    for clutter in [
+        "<doc-claim",
+        "### Claims",
+        "Residue:",
+        "## probe",
+        "docs/architecture.spec.md",
+    ] {
+        assert!(
+            !page.contains(clutter),
+            "the page must not carry {clutter:?}: {page}"
+        );
+    }
+}
+
 /// `veridoc init` names the plugin, writes the configuration, and lets the plugin create the files
 /// only it can write. Flags answer every question, so the test needs no terminal.
 #[test]

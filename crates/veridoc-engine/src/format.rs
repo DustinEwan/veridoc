@@ -46,65 +46,21 @@ pub fn unchanged(root: &Path, hash: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// One file per document node under `{output.dir}/markdown/`, mirroring the tree: the
-/// authored spans, then the named claims with subject and signature in words. A claim
-/// carrying the residue flag carries the marker `[unverified]` before its text.
+/// One file per document node under `{output.dir}/markdown/`, mirroring the tree. The page is the
+/// authored prose and nothing else: a `<doc-claim>` marker is removed once it has named its claim,
+/// because the reader of a finished page has no use for the reference that bound the sentence. The
+/// verdicts, subjects, signatures, and metrics a run computed belong to the result document, which
+/// `.veridoc/result.json` and the `json` formatter already carry.
 fn markdown(root: &Path, config: &Config, doc: &ResultDocument) -> Result<(), String> {
     let base = root.join(&config.output.dir).join("markdown");
     for node in &doc.tree {
-        let sections: Vec<_> = doc
-            .sections
-            .iter()
-            .filter(|s| s.file == node.path)
-            .collect();
         let mut out = String::new();
-        out.push_str(&format!("# {}\n\n", node.path));
-        for section in sections {
-            out.push_str(&format!("## {}\n\n", section.subject));
+        for section in doc.sections.iter().filter(|s| s.file == node.path) {
             for span in &section.spans {
-                out.push_str(&format!("{}\n\n", span.text));
-            }
-            if !section.claims.is_empty() {
-                out.push_str("### Claims\n\n");
-                for id in &section.claims {
-                    let Some(claim) = doc.claims.iter().find(|c| c.id == *id) else {
-                        continue;
-                    };
-                    let marker = if claim.residue { "[unverified] " } else { "" };
-                    out.push_str(&format!(
-                        "- {marker}{} ({})\n",
-                        claim.text,
-                        match claim.outcome {
-                            crate::result::Outcome::Supported => "supported",
-                            crate::result::Outcome::Contradicted => "contradicted",
-                            crate::result::Outcome::RunFailed => "run-failed",
-                        }
-                    ));
-                    out.push_str(&format!(
-                        "  - subject: {} — {}\n",
-                        claim.referent_id, claim.signature
-                    ));
-                }
-                out.push('\n');
-            }
-            if !section.injections.is_empty() {
-                out.push_str("### Injected\n\n");
-                for pulled in &section.injections {
-                    out.push_str(&format!(
-                        "- doc-each source=\"{}\": {} {}\n",
-                        pulled.source,
-                        pulled.items,
-                        if pulled.items == 1 { "value" } else { "values" }
-                    ));
-                }
-                out.push('\n');
+                out.push_str(&prose(&span.text));
+                out.push_str("\n\n");
             }
         }
-        let residue = doc.metrics.residue;
-        let total = doc.claims.len();
-        out.push_str(&format!(
-            "---\nResidue: {residue} of {total} claims rest on text this project cannot check.\n"
-        ));
         // The authored source is `docs/architecture.spec.md`; the rendered document
         // drops the `.spec` marker because the output is the finished prose.
         let rendered = node
@@ -118,6 +74,30 @@ fn markdown(root: &Path, config: &Config, doc: &ResultDocument) -> Result<(), St
         std::fs::write(file, out).map_err(|e| format!("writing markdown failed: {e}"))?;
     }
     Ok(())
+}
+
+/// The authored span with its verification markup taken out. A `<doc-claim name="…"/>` sits inside a
+/// sentence, so removing one can leave a space before the punctuation that followed it: "stops at the
+/// first project root <doc-claim …/>." has to come back out as "stops at the first project root.".
+/// Only the space the removal created is touched, never one the author wrote.
+fn prose(text: &str) -> String {
+    const PUNCTUATION: [char; 8] = ['.', ',', ':', ';', '!', '?', ')', ']'];
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("<doc-claim") {
+        out.push_str(&rest[..at]);
+        let Some(close) = rest[at..].find('>') else {
+            out.push_str(&rest[at..]);
+            return out;
+        };
+        let after = &rest[at + close + 1..];
+        if out.ends_with(' ') && after.starts_with(PUNCTUATION) {
+            out.truncate(out.trim_end().len());
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 fn json(root: &Path, config: &Config, result_json: &Path) -> Result<(), String> {
