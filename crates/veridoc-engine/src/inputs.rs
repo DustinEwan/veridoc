@@ -72,14 +72,18 @@ impl Diff {
 /// The project's input files, hashed. A git checkout is fingerprinted by what git tracks, which
 /// is what a commit contains and already respects every ignore rule; any other directory is
 /// walked with the exclusion list above.
-pub fn collect(root: &Path) -> io::Result<Files> {
+///
+/// `output_dir` is the project's `output.dir`: the documentation a run renders is that run's own
+/// product, so it is excluded wherever the project chooses to put it, including a tracked
+/// directory such as `docs/`. Covering it would make every run invalidate the record it just wrote.
+pub fn collect(root: &Path, output_dir: &str) -> io::Result<Files> {
     let paths = match tracked(root) {
         Some(paths) => paths,
         None => walk(root)?,
     };
     let mut files = Files::new();
     for relative in paths {
-        if !is_input(&relative) {
+        if !is_input(&relative) || is_output(&relative, output_dir) {
             continue;
         }
         let path = root.join(&relative);
@@ -91,6 +95,17 @@ pub fn collect(root: &Path) -> io::Result<Files> {
         files.insert(relative, hash::hex64(&bytes));
     }
     Ok(files)
+}
+
+/// Whether `relative` is inside the directory the run renders its documentation into. The config
+/// spells that directory with an optional leading `./` and an optional trailing `/`, and the paths
+/// compared here never carry either, so both are trimmed before the comparison.
+fn is_output(relative: &str, output_dir: &str) -> bool {
+    let dir = output_dir
+        .trim()
+        .trim_start_matches("./")
+        .trim_end_matches('/');
+    !dir.is_empty() && relative.starts_with(&format!("{dir}/"))
 }
 
 fn is_input(relative: &str) -> bool {

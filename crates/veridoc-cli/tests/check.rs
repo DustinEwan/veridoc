@@ -495,6 +495,31 @@ fn stat_needs_the_record_and_not_an_installed_plugin() {
     );
 }
 
+/// A project that renders its documentation into a tracked directory is still gated by the record:
+/// the pages the run wrote are its own product, not inputs it never read. Without that exclusion the
+/// next `stat` would find them added and report the record stale forever.
+#[test]
+fn stat_ignores_the_documentation_the_run_rendered() {
+    let (root, _judge) = scaffold_with(
+        "stat-rendered",
+        None,
+        json!({ "output": { "dir": "./website", "formatters": ["markdown"] } }),
+    );
+    let (code, _stdout, stderr) = veridoc(&["check", "--project", root.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(
+        root.join("website/markdown/docs/architecture.md").is_file(),
+        "the formatter writes into the directory the config names"
+    );
+    let (code, stdout, stderr) = veridoc(&["stat", "--project", root.to_str().unwrap()]);
+    let printed = format!("{stdout}{stderr}");
+    assert_eq!(code, 0, "exit {code}\n{printed}");
+    assert!(
+        printed.contains("record current"),
+        "the rendered pages must not be inputs: {printed}"
+    );
+}
+
 /// `veridoc init` names the plugin, writes the configuration, and lets the plugin create the files
 /// only it can write. Flags answer every question, so the test needs no terminal.
 #[test]

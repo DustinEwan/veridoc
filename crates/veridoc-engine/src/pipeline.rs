@@ -571,7 +571,9 @@ pub fn check(loaded: &LoadedConfig, force: bool, stop: &AtomicBool) -> Report {
     // 16. The input fingerprint `veridoc stat` compares a later checkout against. Failing to
     //     write it is a run failure: a run that records what it read is the only run a job that
     //     cannot call a model can trust later.
-    if let Err(e) = inputs::collect(root).and_then(|files| inputs::write(root, &files)) {
+    if let Err(e) =
+        inputs::collect(root, &config.output.dir).and_then(|files| inputs::write(root, &files))
+    {
         return Report::run_failure(format!("run failed: inputs: {e}"));
     }
     if skipped {

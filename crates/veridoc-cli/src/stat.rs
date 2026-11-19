@@ -26,7 +26,7 @@ pub fn run(project: &Path) -> Result<i32, String> {
             root.display()
         ));
     };
-    let current = inputs::collect(root).map_err(|e| e.to_string())?;
+    let current = inputs::collect(root, &loaded.config.output.dir).map_err(|e| e.to_string())?;
     let diff = inputs::diff(&recorded, &current);
     if diff.is_empty() {
         println!(
